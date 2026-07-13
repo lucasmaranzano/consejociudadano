@@ -1,0 +1,1567 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0f1923">
+<title>Consejo Ciudadano · Cobros</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,500;0,9..40,700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0f1923;--surface:#182430;--surface2:#1e2f3d;
+  --accent:#22d68a;--danger:#f0544f;--warn:#f5a623;--blue:#4da6ff;
+  --text:#e8edf2;--text2:#8a9bb0;--text3:#506272;
+  --radius:14px;--safe-bottom:env(safe-area-inset-bottom,0px);
+}
+html{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);-webkit-tap-highlight-color:transparent;overflow-x:hidden}
+body{min-height:100dvh;padding-bottom:calc(80px + var(--safe-bottom))}
+.mono{font-family:'JetBrains Mono',monospace}
+
+/* Initial loading */
+.loading-screen{position:fixed;inset:0;background:var(--bg);z-index:999;display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .4s}
+.loading-screen.hidden{opacity:0;pointer-events:none}
+.spinner{width:36px;height:36px;border:3px solid var(--surface2);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading-screen p{margin-top:16px;color:var(--text2);font-size:14px}
+
+/* Action overlay - shows while saving */
+.action-overlay{position:fixed;inset:0;background:rgba(15,25,35,.85);z-index:500;display:flex;flex-direction:column;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .2s;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)}
+.action-overlay.active{opacity:1;pointer-events:auto}
+.action-overlay .spinner{width:32px;height:32px}
+.action-overlay p{margin-top:14px;font-size:14px;color:var(--text);font-weight:500}
+.action-overlay .sub{font-size:12px;color:var(--text3);margin-top:6px}
+
+.sync-bar{height:3px;background:transparent;position:fixed;top:0;left:0;right:0;z-index:60}
+.sync-bar.syncing{background:var(--accent);animation:pulse 1s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.4}50%{opacity:1}}
+.sync-bar.error{background:var(--danger);animation:none}
+
+.topbar{position:sticky;top:3px;z-index:50;background:var(--bg);border-bottom:1px solid var(--surface2);padding:16px 20px 12px}
+.topbar-row{display:flex;justify-content:space-between;align-items:center}
+.topbar h1{font-size:15px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--text2)}
+.topbar h1 span{color:var(--accent)}
+.topbar-btns{display:flex;gap:8px}
+.btn-icon{background:var(--surface);border:none;color:var(--text2);width:34px;height:34px;border-radius:10px;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.btn-icon:active{background:var(--surface2)}
+.btn-icon.spinning{animation:spin .7s linear infinite}
+.month-nav{display:flex;align-items:center;gap:12px;margin-top:10px}
+.month-nav button{background:var(--surface);border:none;color:var(--text);width:36px;height:36px;border-radius:10px;font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.month-nav button:active{background:var(--surface2)}
+.month-label{font-size:20px;font-weight:700;flex:1;text-align:center;text-transform:capitalize}
+
+/* Finance summary */
+.finance{padding:14px 20px 0}
+.finance-card{background:var(--surface);border-radius:var(--radius);padding:14px 16px}
+.finance-row{display:flex;justify-content:space-between;align-items:center;padding:6px 0}
+.finance-row .label{font-size:13px;color:var(--text2)}
+.finance-row .value{font-size:15px;font-weight:700}
+.finance-row .value.green{color:var(--accent)}
+.finance-row .value.red{color:var(--danger)}
+.finance-row .value.blue{color:var(--blue)}
+.finance-row .value.yellow{color:var(--warn)}
+.finance-divider{border:none;border-top:1px solid var(--surface2);margin:4px 0}
+.finance-row.total .label{font-weight:700;color:var(--text);font-size:14px}
+.finance-row.total .value{font-size:18px}
+.finance-sub{font-size:11px;color:var(--text3);margin-top:6px;text-align:right}
+
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:10px 20px}
+.stat-card{background:var(--surface);border-radius:var(--radius);padding:10px 14px;text-align:center}
+.stat-card .val{font-size:20px;font-weight:700}
+.stat-card .val.green{color:var(--accent)}
+.stat-card .val.yellow{color:var(--warn)}
+.stat-card .lbl{font-size:11px;color:var(--text2);margin-top:2px;text-transform:uppercase;letter-spacing:.3px}
+
+.expenses-section{padding:6px 20px 4px}
+.expenses-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.expenses-header h3{font-size:13px;color:var(--text2);text-transform:uppercase;letter-spacing:.3px}
+.expenses-header button{background:var(--surface);border:none;color:var(--blue);font-size:12px;font-weight:700;padding:6px 12px;border-radius:8px;cursor:pointer;font-family:inherit}
+.expense-chip{background:var(--surface);border-radius:10px;padding:10px 14px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center}
+.expense-chip .left{font-size:13px}
+.expense-chip .left span{color:var(--text2);font-size:11px;display:block;margin-top:2px}
+.expense-chip .right{font-size:13px;font-weight:700;color:var(--danger);display:flex;align-items:center}
+.expense-chip .del{background:none;border:none;color:var(--text3);font-size:16px;cursor:pointer;margin-left:10px;padding:0 4px}
+
+.search-wrap{padding:6px 20px 10px;position:relative}
+.search-wrap input{width:100%;background:var(--surface);border:1.5px solid transparent;border-radius:12px;padding:11px 14px 11px 40px;font-size:15px;color:var(--text);font-family:inherit;outline:none}
+.search-wrap input:focus{border-color:var(--accent)}
+.search-wrap .icon{position:absolute;left:34px;top:50%;transform:translateY(-50%);color:var(--text3);font-size:16px;pointer-events:none}
+
+.tabs{display:flex;gap:8px;padding:4px 20px 10px;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.tabs::-webkit-scrollbar{display:none}
+.tab{background:var(--surface);border:none;color:var(--text2);padding:8px 16px;border-radius:20px;font-size:13px;font-weight:500;font-family:inherit;white-space:nowrap;cursor:pointer}
+.tab.active{background:var(--accent);color:var(--bg);font-weight:700}
+.tab:active{transform:scale(.96)}
+
+.list{padding:0 20px}
+.member-card{background:var(--surface);border-radius:var(--radius);padding:14px 16px;margin-bottom:10px;display:flex;align-items:center;gap:14px;cursor:pointer;overflow:hidden;animation:fadeUp .3s ease both}
+.member-card:active{transform:scale(.985)}
+@keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+.avatar{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:700;flex-shrink:0;text-transform:uppercase}
+.avatar.paid{background:rgba(34,214,138,.15);color:var(--accent)}
+.avatar.pending{background:rgba(245,166,35,.15);color:var(--warn)}
+.avatar.overdue{background:rgba(240,84,79,.15);color:var(--danger)}
+.avatar.inactive{background:rgba(138,155,176,.15);color:var(--text2)}
+.member-info{flex:1;min-width:0}
+.member-name{font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.member-detail{font-size:12px;color:var(--text2);margin-top:2px}
+.status-badge{font-size:11px;font-weight:700;padding:4px 10px;border-radius:8px;text-transform:uppercase;letter-spacing:.3px;flex-shrink:0}
+.status-badge.paid{background:rgba(34,214,138,.12);color:var(--accent)}
+.status-badge.pending{background:rgba(245,166,35,.12);color:var(--warn)}
+.status-badge.overdue{background:rgba(240,84,79,.12);color:var(--danger)}
+
+.empty{text-align:center;padding:60px 20px;color:var(--text3)}
+.empty .icon{font-size:48px;margin-bottom:12px}
+.empty p{font-size:14px;line-height:1.5}
+
+.bottom-bar{position:fixed;bottom:0;left:0;right:0;background:var(--surface);border-top:1px solid var(--surface2);display:flex;gap:12px;padding:12px 20px calc(12px + var(--safe-bottom));z-index:100}
+.btn{border:none;border-radius:12px;padding:12px 24px;font-size:14px;font-weight:700;font-family:inherit;cursor:pointer;display:flex;align-items:center;gap:8px;text-transform:uppercase;letter-spacing:.3px;justify-content:center}
+.btn:active{transform:scale(.96)}
+.btn-primary{background:var(--accent);color:var(--bg);flex:1}
+.btn-secondary{background:var(--surface2);color:var(--text);flex:1}
+.btn[disabled]{opacity:.5;pointer-events:none}
+.btn-danger{background:rgba(240,84,79,.15);color:var(--danger)}
+.btn-warn{background:var(--warn);color:var(--bg)}
+.btn-wa{background:#25D366;color:#fff;flex:1}
+
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200;opacity:0;pointer-events:none;transition:opacity .25s}
+.overlay.open{opacity:1;pointer-events:auto}
+.drawer{position:fixed;bottom:0;left:0;right:0;background:var(--bg);border-radius:20px 20px 0 0;z-index:201;transform:translateY(100%);transition:transform .3s cubic-bezier(.32,.72,0,1);max-height:92dvh;overflow-y:auto;padding:20px 20px calc(20px + var(--safe-bottom))}
+.drawer.open{transform:translateY(0)}
+.drawer-handle{width:36px;height:4px;border-radius:2px;background:var(--text3);margin:0 auto 18px}
+.drawer h2{font-size:18px;font-weight:700;margin-bottom:16px}
+
+.field{margin-bottom:14px}
+.field label{display:block;font-size:12px;color:var(--text2);margin-bottom:6px;text-transform:uppercase;letter-spacing:.3px;font-weight:500}
+.field input,.field select{width:100%;background:var(--surface);border:1.5px solid var(--surface2);border-radius:12px;padding:12px 14px;font-size:15px;color:var(--text);font-family:inherit;outline:none;-webkit-appearance:none;appearance:none}
+.field input:focus,.field select:focus{border-color:var(--accent)}
+.field .error-border{border-color:var(--danger)!important}
+.field .field-error{font-size:11px;color:var(--danger);margin-top:4px;display:none}
+.field .field-error.show{display:block}
+.phone-input-wrap{display:flex;align-items:center}
+.phone-prefix{background:var(--surface2);color:var(--text2);padding:12px 12px;border-radius:12px 0 0 12px;font-size:15px;font-weight:600;border:1.5px solid var(--surface2);border-right:none;white-space:nowrap}
+.phone-input-wrap input{border-radius:0 12px 12px 0!important}
+.drawer .actions{display:flex;gap:10px;margin-top:18px}
+.drawer .actions .btn{flex:1;padding:14px}
+
+.detail-header{display:flex;align-items:center;gap:14px;margin-bottom:20px}
+.detail-header .big-avatar{width:56px;height:56px;border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:700}
+.detail-header .info h3{font-size:20px;font-weight:700}
+.detail-header .info p{font-size:13px;color:var(--text2)}
+.history-item{background:var(--surface);border-radius:12px;padding:12px 14px;margin-bottom:8px}
+.history-row{display:flex;justify-content:space-between;align-items:center}
+.history-item .left{font-size:14px}
+.history-item .left span{color:var(--text2);font-size:12px;display:block;margin-top:2px}
+.history-item .right{font-size:13px;font-weight:600}
+.history-item .right.paid{color:var(--accent)}
+.history-actions{display:flex;gap:8px;margin-top:8px}
+.history-actions button,.history-actions a{font-size:12px;padding:6px 12px;border-radius:8px;border:none;cursor:pointer;font-family:inherit;font-weight:600;text-decoration:none;display:inline-flex;align-items:center;gap:4px}
+.btn-mini-wa{background:#25D366;color:#fff}
+.btn-mini-danger{background:rgba(240,84,79,.12);color:var(--danger)}
+
+.toast{position:fixed;top:20px;left:50%;transform:translateX(-50%) translateY(-80px);background:var(--accent);color:var(--bg);padding:12px 24px;border-radius:12px;font-size:14px;font-weight:600;z-index:300;transition:transform .35s cubic-bezier(.32,.72,0,1);pointer-events:none;white-space:nowrap}
+.toast.show{transform:translateX(-50%) translateY(0)}
+.toast.error{background:var(--danger);color:#fff}
+
+.confirm-box{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) scale(.9);background:var(--surface);border-radius:20px;padding:24px;z-index:250;opacity:0;pointer-events:none;transition:all .2s;width:calc(100% - 40px);max-width:340px;text-align:center}
+.confirm-box.open{opacity:1;transform:translate(-50%,-50%) scale(1);pointer-events:auto}
+.confirm-box h3{font-size:17px;font-weight:700;margin-bottom:8px}
+.confirm-box p{font-size:14px;color:var(--text2);margin-bottom:20px;line-height:1.5}
+.confirm-box .actions{display:flex;gap:10px}
+
+.export-info{font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:14px}
+.period-hint{font-size:12px;color:var(--warn);margin-top:-8px;margin-bottom:14px;padding:8px 12px;background:rgba(245,166,35,.08);border-radius:8px;line-height:1.4}
+::-webkit-scrollbar{width:0;height:0}
+
+/* Login */
+.login-screen{position:fixed;inset:0;background:var(--bg);z-index:1000;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px}
+.login-card{background:var(--surface);padding:24px;border-radius:20px;width:100%;max-width:320px;box-shadow:0 10px 30px rgba(0,0,0,0.2);text-align:center}
+.login-card h2{margin-bottom:20px;font-size:22px;color:var(--text)}
+.login-card .field{text-align:left;margin-bottom:16px}
+.login-card button{width:100%;padding:14px;margin-top:10px}
+.login-error{color:var(--danger);font-size:13px;margin-top:12px;display:none}
+.login-error.show{display:block}
+.login-hint{font-size:12px;color:var(--text3);margin-top:16px}
+body.role-viewer .admin-only { display: none !important; }
+body:not(.role-viewer) .viewer-only { display: none !important; }
+body.role-viewer { padding-bottom: calc(20px + var(--safe-bottom)); }
+</style>
+</head>
+<body>
+
+<div class="login-screen" id="loginScreen" style="display:none;background:rgba(15,25,35,.85);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)">
+  <div class="login-card" style="position:relative;margin:0 20px">
+    <button onclick="closeLogin()" style="position:absolute;top:14px;right:14px;background:none;border:none;color:var(--text3);font-size:22px;cursor:pointer">✕</button>
+    <h2>Acceso Admin</h2>
+    <div class="field">
+      <label>Email</label>
+      <input type="email" id="loginUser" placeholder="tu@email.com" autocomplete="username" inputmode="email">
+    </div>
+    <div class="field">
+      <label>Contraseña</label>
+      <input type="password" id="loginPass" placeholder="••••••••" onkeyup="if(event.key==='Enter')doLogin()">
+    </div>
+    <button class="btn btn-primary" onclick="doLogin()">Ingresar</button>
+    <div class="login-error" id="loginError" style="margin-top:16px;line-height:1.4"></div>
+  </div>
+</div>
+
+<div class="loading-screen" id="loadingScreen"><div class="spinner"></div><p id="loadingMsg">Conectando...</p></div>
+
+<div class="action-overlay" id="actionOverlay">
+  <div class="spinner"></div>
+  <p id="actionMsg">Guardando...</p>
+  <div class="sub">Guardando en la base</div>
+</div>
+
+<div class="sync-bar" id="syncBar"></div>
+
+<div class="topbar">
+  <div class="topbar-row">
+    <h1>Consejo <span>Ciudadano</span></h1>
+    <div class="topbar-btns">
+      <button class="btn-icon" onclick="syncData()" id="syncBtn">🔄</button>
+      <button class="btn-icon admin-only" onclick="openConfig()">⚙️</button>
+      <button class="btn-icon viewer-only" onclick="openLogin()" title="Acceso Admin">🔒</button>
+      <button class="btn-icon admin-only" onclick="logout()" title="Cerrar sesión">🚪</button>
+    </div>
+  </div>
+  <div class="month-nav">
+    <button onclick="changeMonth(-1)">‹</button>
+    <div class="month-label" id="monthLabel"></div>
+    <button onclick="changeMonth(1)">›</button>
+  </div>
+</div>
+
+<div class="finance" id="financeSection"></div>
+<div class="stats" id="statsStrip"></div>
+<div class="expenses-section" id="expensesSection"></div>
+
+<div class="search-wrap">
+  <span class="icon">🔍</span>
+  <input type="text" id="searchInput" placeholder="Buscar miembro..." oninput="renderList()">
+</div>
+
+<div class="tabs">
+  <button class="tab active" onclick="setFilter('all',this)">Todos</button>
+  <button class="tab" onclick="setFilter('paid',this)">Pagaron</button>
+  <button class="tab" onclick="setFilter('pending',this)">Pendientes</button>
+  <button class="tab" onclick="setFilter('overdue',this)">Vencidos</button>
+</div>
+
+<div class="list" id="memberList"></div>
+
+<div class="bottom-bar admin-only">
+  <button class="btn btn-secondary" onclick="openExport()">📊</button>
+  <button class="btn btn-primary" onclick="openAddMember()" style="flex:2">＋ Miembro</button>
+</div>
+
+<div class="overlay" id="overlay" onclick="closeAllDrawers()"></div>
+
+<div class="drawer" id="memberDrawer">
+  <div class="drawer-handle"></div>
+  <h2 id="drawerTitle">Nuevo Miembro</h2>
+  <div class="field"><label>Nombre</label><input type="text" id="fNombre" placeholder="Ej: Juan" autocomplete="off" onblur="this.value=titleCase(this.value)"></div>
+  <div class="field"><label>Apellido</label><input type="text" id="fApellido" placeholder="Ej: Pérez" autocomplete="off" onblur="this.value=titleCase(this.value)"></div>
+  <div class="field">
+    <label>Teléfono / WhatsApp</label>
+    <div class="phone-input-wrap"><span class="phone-prefix">+54</span><input type="tel" id="fPhone" placeholder="381 555 1234" inputmode="numeric" maxlength="15"></div>
+    <div class="field-error" id="phoneError">Ingresá 10 dígitos (sin el +54)</div>
+  </div>
+  <div class="field"><label>Alias de transferencia (opcional)</label><input type="text" id="fAlias" placeholder="Ej: juan.perez.mp"></div>
+  <div class="actions" id="drawerActions"></div>
+</div>
+
+<div class="drawer" id="payDrawer">
+  <div class="drawer-handle"></div>
+  <h2>Registrar Pago</h2>
+  <div id="payForName" style="font-size:16px;font-weight:600;margin-bottom:16px;color:var(--accent)"></div>
+  <div class="field"><label>Período que paga</label><div style="display:flex;gap:10px"><select id="fPayMonth"></select><select id="fPayYear"></select></div></div>
+  <div class="period-hint" id="periodHint" style="display:none">⚠️ Período diferente al mes actual.</div>
+  <div class="field"><label>Fecha de pago</label><input type="date" id="fPayDate"></div>
+  <div class="field"><label>Monto</label><input type="text" id="fPayAmount" inputmode="numeric" oninput="formatCurrencyInput(this)"></div>
+  <div class="field"><label>Comprobante (opcional)</label><input type="text" id="fPayRef" placeholder="Últimos 4 dígitos"></div>
+  <div class="field"><label>Nota (opcional)</label><input type="text" id="fPayNote" placeholder="Ej: pagó 2 meses juntos"></div>
+  <div class="actions">
+    <button class="btn btn-secondary" onclick="closeAllDrawers()">Cancelar</button>
+    <button class="btn btn-primary" id="btnSavePay" onclick="savePayment()">✓ Confirmar</button>
+  </div>
+</div>
+
+<div class="drawer" id="expenseDrawer">
+  <div class="drawer-handle"></div>
+  <h2 id="expenseDrawerTitle">Registrar Gasto</h2>
+  <div class="field"><label>Tipo</label><select id="fExpType"><option value="gasto">💸 Gasto</option><option value="reintegro">↩️ Ingreso</option></select></div>
+  <div class="field"><label>Concepto</label><select id="fExpConcept"><option value="Alquiler Rolling Code">🏠 Alquiler Rolling Code</option><option value="Servicios">💡 Servicios</option><option value="Limpieza">🧹 Limpieza</option><option value="Otro">📋 Otro</option></select></div>
+  <div class="field" id="fExpCustomWrap" style="display:none"><label>Concepto personalizado</label><input type="text" id="fExpCustom" placeholder="Ej: Mantenimiento"></div>
+  <div class="field"><label>Período</label><div style="display:flex;gap:10px"><select id="fExpMonth"></select><select id="fExpYear"></select></div></div>
+  <div class="field"><label>Monto</label><input type="text" id="fExpAmount" inputmode="numeric" placeholder="Ej: $ 50.000" oninput="formatCurrencyInput(this)"></div>
+  <div class="field"><label>Fecha de pago</label><input type="date" id="fExpDate"></div>
+  <div class="field"><label>Nota (opcional)</label><input type="text" id="fExpNote" placeholder="Ej: recibo nro 123"></div>
+  <div class="actions">
+    <button class="btn btn-secondary" onclick="closeAllDrawers()">Cancelar</button>
+    <button class="btn btn-primary" id="btnSaveExp" onclick="saveExpense()">✓ Registrar</button>
+  </div>
+</div>
+
+<div class="drawer" id="detailDrawer"><div class="drawer-handle"></div><div id="detailContent"></div></div>
+
+<div class="drawer" id="exportDrawer">
+  <div class="drawer-handle"></div><h2>📊 Exportar</h2>
+  <p class="export-info">Resumen del mes para compartir o descargar.</p>
+  <div class="actions" style="flex-direction:column;gap:10px">
+    <button class="btn btn-primary" onclick="exportWhatsApp()">📋 Reporte de Caja</button>
+    <button class="btn btn-primary" style="background:var(--warn);color:var(--bg)" onclick="exportPendientes()">⚠️ Quiénes faltan pagar</button>
+    <button class="btn btn-primary" style="background:var(--blue);color:var(--bg)" onclick="exportMembershipPDF()">📄 Planilla Anual PDF</button>
+    <button class="btn btn-secondary" onclick="exportCSV()">📑 Descargar CSV</button>
+    <button class="btn btn-secondary" onclick="closeAllDrawers()">Cerrar</button>
+  </div>
+</div>
+
+<div class="drawer" id="configDrawer">
+  <div class="drawer-handle"></div><h2>⚙️ Configuración</h2>
+  <p class="export-info">Conectado a Supabase en tiempo real. Los cambios se sincronizan solos entre dispositivos.</p>
+  <div class="actions" style="flex-direction:column;gap:10px">
+    <button class="btn btn-secondary" onclick="syncData();closeAllDrawers()">🔄 Forzar sincronización</button>
+    <button class="btn btn-danger" onclick="logout()">🚪 Cerrar sesión</button>
+    <button class="btn btn-secondary" onclick="closeAllDrawers()">Cerrar</button>
+  </div>
+</div>
+
+<div class="confirm-box" id="confirmBox"><h3 id="confirmTitle"></h3><p id="confirmMsg"></p><div class="actions"><button class="btn btn-secondary" onclick="closeConfirm()">Cancelar</button><button class="btn btn-danger" id="confirmBtn">Confirmar</button></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+// ═══════ CONSTANTS ═══════
+var CACHE_KEY='consejo_cache',AMOUNT=10000;
+var MONTHS=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+
+// ═══════ SUPABASE ═══════
+// La anon key es pública por diseño: la seguridad real la dan las políticas RLS.
+// Lectura abierta a todos; escritura sólo con sesión autenticada (Malu).
+var SUPABASE_URL = 'https://gswuxwstjpmfhzusdaqf.supabase.co';
+var SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imdzd3V4d3N0anBtZmh6dXNkYXFmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5NjE0NDMsImV4cCI6MjA5OTUzNzQ0M30.rSnSPhGAM2LLbvnYmkVlDCvPIy_xcAo9tsdkrIilF44';
+var sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// ═══════ STATE ═══════
+var members=[],payments=[],expenses=[];
+var todayLocal = new Date();
+var viewMonth=todayLocal.getMonth();
+var viewYear=Math.max(2026, todayLocal.getFullYear());
+if(viewYear===2026 && viewMonth<2){viewMonth=2;} // 2026 arranca en marzo; años posteriores respetan el mes actual
+var activeFilter='all';
+var _editingMemberId=null,_payingMemberId=null;
+var currentUserRole = null;
+var _realtimeSub = null;      // canal de Realtime (websocket)
+var _realtimeTimer = null;    // debounce para recargas por Realtime
+
+// ═══════ AUTH (Supabase) ═══════
+// La sesión la gestiona Supabase (se guarda sola en localStorage y se renueva).
+// admin = hay sesión iniciada; viewer = anónimo (sólo lectura).
+async function checkAuth() {
+  try {
+    var r = await sb.auth.getSession();
+    setRole(r.data.session ? 'admin' : 'viewer');
+  } catch(e) {
+    setRole('viewer');
+  }
+  // Mantiene el rol sincronizado si la sesión cambia (login/logout/expiración).
+  sb.auth.onAuthStateChange(function(_event, session){
+    setRole(session ? 'admin' : 'viewer');
+  });
+}
+
+function openLogin() {
+  document.getElementById('loginUser').value = '';
+  document.getElementById('loginPass').value = '';
+  document.getElementById('loginError').classList.remove('show');
+  document.getElementById('loginScreen').style.display = 'flex';
+  setTimeout(function(){ document.getElementById('loginUser').focus(); }, 100);
+}
+
+function closeLogin() {
+  document.getElementById('loginScreen').style.display = 'none';
+}
+
+async function doLogin() {
+  var email = document.getElementById('loginUser').value.trim();
+  var p = document.getElementById('loginPass').value.trim();
+  var err = document.getElementById('loginError');
+  err.classList.remove('show');
+
+  if(!email || !p) {
+    err.textContent = 'Ingresá email y contraseña';
+    err.classList.add('show');
+    return;
+  }
+
+  showAction('Verificando...');
+  try {
+    var res = await sb.auth.signInWithPassword({ email: email, password: p });
+    hideAction();
+    if (res.error) throw res.error;
+    finishLogin();
+  } catch(e) {
+    hideAction();
+    var msg = (e && e.message) || 'Error de conexión';
+    if(/invalid login credentials/i.test(msg)) msg = 'Email o contraseña incorrectos';
+    err.textContent = msg;
+    err.classList.add('show');
+  }
+}
+
+function finishLogin() {
+  setRole('admin');
+  closeLogin();
+  syncData();
+}
+
+function setRole(role) {
+  currentUserRole = role;
+  if (role === 'viewer') {
+    document.body.classList.add('role-viewer');
+  } else {
+    document.body.classList.remove('role-viewer');
+  }
+}
+
+async function logout() {
+  try { await sb.auth.signOut(); } catch(e) {}
+  setRole('viewer');
+  closeAllDrawers();
+}
+
+// ═══════ ACTION OVERLAY ═══════
+function showAction(msg){
+  document.getElementById('actionMsg').textContent=msg;
+  document.getElementById('actionOverlay').classList.add('active');
+}
+function hideAction(){
+  document.getElementById('actionOverlay').classList.remove('active');
+}
+
+// ═══════ CAPA DE DATOS (Supabase) ═══════
+// Cada operación de escritura exige sesión (RLS lo hace cumplir en el servidor).
+// Traducen el error de Supabase a un mensaje legible para el toast.
+function sbThrow(error){
+  var m = (error && error.message) || 'Error';
+  if(/row-level security|permission|jwt|not authorized/i.test(m)) m = 'Acceso denegado: iniciá sesión.';
+  throw new Error(m);
+}
+
+// ── MIEMBROS ──
+async function dbAddMember(p){
+  var id = uid12();
+  var r = await sb.from('miembros').insert({
+    id:id, nombre:p.nombre||'', apellido:p.apellido||'',
+    phone:p.phone||'', alias:p.alias||'', historial:[]
+  });
+  if(r.error) sbThrow(r.error);
+  return {id:id};
+}
+async function dbUpdateMember(p){
+  var r = await sb.from('miembros').update({
+    nombre:p.nombre||'', apellido:p.apellido||'', phone:p.phone||'', alias:p.alias||''
+  }).eq('id', p.id);
+  if(r.error) sbThrow(r.error);
+}
+async function dbDeleteMember(id){
+  // Los pagos se borran solos por la FK on delete cascade.
+  var r = await sb.from('miembros').delete().eq('id', id);
+  if(r.error) sbThrow(r.error);
+}
+// Agrega un evento de alta/baja al historial (jsonb) y sincroniza fecha_baja.
+async function dbMembershipEvent(id, type, date){
+  var m = members.find(function(x){return x.id===id});
+  var hist = m ? getHistory(m).slice() : [];
+  hist.push({t:type, d:date});
+  var r = await sb.from('miembros').update({
+    historial: hist,
+    fecha_baja: (type==='baja' ? date : null)
+  }).eq('id', id);
+  if(r.error) sbThrow(r.error);
+}
+
+// ── PAGOS ──
+async function dbAddPayment(p){
+  var id = uid12();
+  // upsert por (member_id, month): si ya existía ese mes, lo reemplaza.
+  var r = await sb.from('pagos').upsert({
+    id:id, member_id:p.memberId, month:p.month, date:p.date||null,
+    amount:Number(p.amount)||AMOUNT, ref:p.ref||'', note:p.note||''
+  }, { onConflict:'member_id,month' });
+  if(r.error) sbThrow(r.error);
+  return {id:id};
+}
+async function dbDeletePayment(memberId, month){
+  var r = await sb.from('pagos').delete().eq('member_id', memberId).eq('month', month);
+  if(r.error) sbThrow(r.error);
+}
+
+// ── GASTOS ──
+async function dbAddExpense(p){
+  var id = uid12();
+  var r = await sb.from('gastos').insert({
+    id:id, month:p.month, concept:p.concept||'',
+    amount:Number(p.amount)||0, date:p.date||null, note:p.note||''
+  });
+  if(r.error) sbThrow(r.error);
+  return {id:id};
+}
+async function dbDeleteExpense(id){
+  var r = await sb.from('gastos').delete().eq('id', id);
+  if(r.error) sbThrow(r.error);
+}
+
+// ═══════ SYNC ═══════
+function setSyncing(v){
+  document.getElementById('syncBar').className=v?'sync-bar syncing':'sync-bar';
+  document.getElementById('syncBtn').classList.toggle('spinning',v);
+}
+
+// Adapta las filas de Supabase (snake_case) al shape que usa la UI (camelCase).
+function mapMemberRow(r){
+  var nombre=String(r.nombre||''), apellido=String(r.apellido||'');
+  return {
+    id:String(r.id), nombre:nombre, apellido:apellido,
+    name:(nombre+' '+apellido).trim(),
+    phone:String(r.phone||''), alias:String(r.alias||''),
+    fechaBaja:r.fecha_baja?String(r.fecha_baja):'',
+    historial:Array.isArray(r.historial)?r.historial:(r.historial||[])
+  };
+}
+function mapPaymentRow(r){
+  return {
+    id:String(r.id), memberId:String(r.member_id), month:String(r.month||''),
+    date:r.date?String(r.date):'', amount:Number(r.amount)||AMOUNT,
+    ref:String(r.ref||''), note:String(r.note||'')
+  };
+}
+function mapExpenseRow(r){
+  return {
+    id:String(r.id), month:String(r.month||''), concept:String(r.concept||''),
+    amount:Number(r.amount)||0, date:r.date?String(r.date):'', note:String(r.note||'')
+  };
+}
+
+async function syncData(){
+  setSyncing(true);
+  try{
+    var res = await Promise.all([
+      sb.from('miembros').select('*'),
+      sb.from('pagos').select('*'),
+      sb.from('gastos').select('*')
+    ]);
+    for(var i=0;i<res.length;i++){ if(res[i].error) throw res[i].error; }
+    members  = (res[0].data||[]).map(mapMemberRow);
+    payments = (res[1].data||[]).map(mapPaymentRow);
+    expenses = (res[2].data||[]).map(mapExpenseRow);
+    saveCache();render();
+    ensureRealtime(); // conecta el websocket la primera vez
+  }catch(e){
+    console.error(e);
+    document.getElementById('syncBar').className='sync-bar error';
+    setTimeout(function(){document.getElementById('syncBar').className='sync-bar'},3000);
+    toast('⚠️ Error de conexión',true);
+  }finally{setSyncing(false)}
+}
+
+// ═══════ REALTIME (websocket) ═══════
+// Cuando cualquiera cambia una tabla, recargamos los datos (con un pequeño
+// debounce para agrupar cambios en ráfaga). Simple y a prueba de balas para
+// este volumen de datos.
+function ensureRealtime(){
+  if(_realtimeSub) return;
+  _realtimeSub = sb.channel('consejo-cambios')
+    .on('postgres_changes', { event:'*', schema:'public', table:'miembros' }, onRealtimeChange)
+    .on('postgres_changes', { event:'*', schema:'public', table:'pagos' },    onRealtimeChange)
+    .on('postgres_changes', { event:'*', schema:'public', table:'gastos' },   onRealtimeChange)
+    .subscribe();
+}
+function onRealtimeChange(){
+  clearTimeout(_realtimeTimer);
+  _realtimeTimer = setTimeout(function(){ syncData(); }, 400);
+}
+
+// ═══════ DRAWERS & TOAST ═══════
+function openDrawer(id){
+  document.querySelectorAll('.drawer').forEach(function(d){d.classList.remove('open')});
+  document.getElementById(id).classList.add('open');
+  document.getElementById('overlay').classList.add('open');
+}
+function closeAllDrawers(){
+  document.querySelectorAll('.drawer').forEach(function(d){d.classList.remove('open')});
+  document.getElementById('overlay').classList.remove('open');
+}
+function closeConfirm(){
+  document.getElementById('confirmBox').classList.remove('open');
+  document.getElementById('overlay').classList.remove('open');
+}
+// Abre el cuadro de confirmación de forma consistente (limpia estilos inline previos y muestra el fondo oscuro).
+function openConfirm(opts){
+  var btn=document.getElementById('confirmBtn');
+  document.getElementById('confirmTitle').textContent=opts.title;
+  document.getElementById('confirmMsg').textContent=opts.msg;
+  btn.className='btn '+(opts.btnClass||'btn-danger');
+  btn.style.background=''; btn.style.color=''; // evita que el color de una baja previa "se pegue" al próximo confirm
+  btn.textContent=opts.btnText||'Confirmar';
+  btn.onclick=opts.onConfirm;
+  document.getElementById('confirmBox').classList.add('open');
+  document.getElementById('overlay').classList.add('open');
+}
+var _toastT;
+function toast(msg,isError){
+  var el=document.getElementById('toast');
+  el.textContent=msg;el.className='toast'+(isError?' error':'')+' show';
+  clearTimeout(_toastT);_toastT=setTimeout(function(){el.classList.remove('show')},2500);
+}
+
+// ═══════ CONFIG ═══════
+// Con Supabase la conexión está fija en el código (URL + anon key), así que
+// el panel de config ya no configura un endpoint. Se mantiene como accesos útiles.
+function loadConfig(){}
+function openConfig(){ openDrawer('configDrawer'); }
+
+// ═══════ CACHE ═══════
+function loadCache(){try{var c=JSON.parse(localStorage.getItem(CACHE_KEY)||'{}');members=c.members||[];payments=c.payments||[];expenses=c.expenses||[]}catch(e){}}
+function saveCache(){localStorage.setItem(CACHE_KEY,JSON.stringify({members:members,payments:payments,expenses:expenses}))}
+
+// ═══════ HELPERS ═══════
+function uid(){return Date.now().toString(36)+Math.random().toString(36).substr(2,5)}
+// ID de 12 caracteres (mismo formato que los registros existentes: hex-hex).
+function uid12(){
+  if(window.crypto && crypto.randomUUID) return crypto.randomUUID().replace(/-/g,'').substr(0,12);
+  var s='';for(var i=0;i<12;i++)s+=Math.floor(Math.random()*16).toString(16);return s;
+}
+function mkKey(m,y){return y+'-'+String(m+1).padStart(2,'0')}
+function curMK(){return mkKey(viewMonth,viewYear)}
+function getPayment(mid,mk){return payments.find(function(p){return p.memberId===mid&&p.month===mk})}
+function cleanPhone(r){return(r||'').replace(/\D/g,'')}
+// Capitaliza la primera letra de cada palabra: "maria luz"->"Maria Luz", "GOMEZ OLMOS"->"Gomez Olmos"
+function titleCase(s){return(s||'').trim().replace(/\s+/g,' ').toLowerCase().replace(/(^|\s|-)([^\s-])/g,function(_,sep,ch){return sep+ch.toUpperCase()})}
+// Orden alfabético por apellido y, si coincide, por nombre (con acentos correctos en español)
+function cmpByApellido(a,b){var ap=(a.apellido||'').localeCompare(b.apellido||'','es');return ap!==0?ap:(a.nombre||'').localeCompare(b.nombre||'','es')}
+// Nombre para mostrar en formato "Apellido, Nombre" (cae al nombre completo si falta el apellido)
+function displayName(m){return m.apellido?(m.apellido+(m.nombre?', '+m.nombre:'')):(m.nombre||m.name||'')}
+function localToday(){var t=new Date();return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0')}
+function localNow(){var t=new Date();return String(t.getDate()).padStart(2,'0')+'/'+String(t.getMonth()+1).padStart(2,'0')+'/'+t.getFullYear()+' '+String(t.getHours()).padStart(2,'0')+':'+String(t.getMinutes()).padStart(2,'0')}
+function formatDate(d){if(!d)return'';var p=d.split('-');return p[2]+'/'+p[1]}
+function formatDateFull(d){if(!d)return'';var p=d.split('-');return p[2]+'/'+p[1]+'/'+p[0]}
+function formatPhoneDisplay(r){var d=cleanPhone(r);if(d.length!==10)return r;return'+54 '+d.substr(0,3)+' '+d.substr(3,3)+' '+d.substr(6,4)}
+function waLink(phone,text){var d=cleanPhone(phone);return d?'https://wa.me/54'+d+'?text='+encodeURIComponent(text):'#'}
+
+function formatCurrencyInput(el) {
+  var val = el.value.replace(/\D/g, '');
+  if (val === '') { el.value = ''; return; }
+  el.value = '$ ' + parseInt(val, 10).toLocaleString('es-AR');
+}
+function getDueDay(month, year) { return (year === 2026 && month === 2) ? 25 : 20; }
+
+function getMemberStatus(mid){
+  var mk=curMK();if(getPayment(mid,mk))return'paid';
+  var dueDay=getDueDay(viewMonth, viewYear);
+  var todayStr=localToday();
+  var dueStr=viewYear+'-'+String(viewMonth+1).padStart(2,'0')+'-'+String(dueDay).padStart(2,'0');
+  var isPast=viewYear<todayLocal.getFullYear()||(viewYear===todayLocal.getFullYear()&&viewMonth<=todayLocal.getMonth());
+  return(isPast&&todayStr>dueStr)?'overdue':'pending';
+}
+function statusLabel(s){return s==='paid'?'Pagó':s==='overdue'?'Vencido':'Pendiente'}
+function receiptMsg(name,mo,yr,date,amount,ref){
+  return'📋 *Recibo - Consejo Ciudadano*\n\n👤 Miembro: *'+name+'*\n📅 Período: *'+MONTHS[mo]+' '+yr+'*\n💰 Monto: *$'+amount.toLocaleString('es-AR')+'*\n🗓️ Fecha: '+formatDateFull(date)+'\n'+(ref?'🔢 Comprobante: #'+ref+'\n':'')+'✅ *PAGADO*\n\n¡Gracias!';
+}
+
+// ───── Historial de altas/bajas ─────
+// Devuelve los eventos {t:'baja'|'alta', d:'YYYY-MM-DD'} ordenados por fecha.
+// Compatibilidad: si no hay historial pero sí fechaBaja (modelo viejo), lo trata como una baja.
+function getHistory(m){
+  var h = m.historial;
+  if (typeof h === 'string') { try { h = JSON.parse(h || '[]'); } catch(e){ h = []; } }
+  if (!Array.isArray(h)) h = [];
+  if (!h.length && m.fechaBaja) h = [{t:'baja', d:m.fechaBaja}];
+  return h.slice().sort(function(a,b){ return String(a.d||'').localeCompare(String(b.d||'')); });
+}
+// Índice de mes absoluto (año*12 + mes 0-based) para comparar fechas a nivel mes.
+function monthIndex(d){ var p=String(d).split('-'); return parseInt(p[0],10)*12 + (parseInt(p[1],10)-1); }
+
+// ¿El miembro está de baja en (mIdx, y)? Reproduce el historial:
+// 'baja' => inactivo desde ese mes (inclusive); 'alta' => activo desde ese mes (inclusive).
+function isInactive(m, mIdx, y){
+  var h = getHistory(m);
+  if (!h.length) return false;
+  var target = y*12 + mIdx, state = false;
+  for (var i=0;i<h.length;i++){
+    if (monthIndex(h[i].d) <= target) state = (h[i].t === 'baja');
+    else break;
+  }
+  return state;
+}
+// ¿Está de baja al día de hoy? (para ocultar en PDF, badge, botón reactivar)
+function isCurrentlyInactive(m){ return isInactive(m, todayLocal.getMonth(), todayLocal.getFullYear()); }
+// Fecha de la baja vigente (si hoy está de baja), o null.
+function currentBajaDate(m){
+  if(!isCurrentlyInactive(m)) return null;
+  var last=null; getHistory(m).forEach(function(e){ if(e.t==='baja') last=e.d; });
+  return last;
+}
+// Iniciales para el avatar a partir de nombre/apellido (cae a name por compatibilidad).
+function initials(m){
+  var a=(m.nombre||'').trim(), b=(m.apellido||'').trim();
+  if(a||b) return (((a[0]||'')+(b[0]||'')).toUpperCase()) || '?';
+  var n=(m.name||'').trim();
+  return n ? n.split(/\s+/).map(function(w){return w[0]}).join('').substr(0,2).toUpperCase() : '?';
+}
+
+// ═══════ RENDER ═══════
+function render(){
+  document.getElementById('monthLabel').textContent=MONTHS[viewMonth]+' '+viewYear;
+  
+  // Prefijo del mes para filtrar fechas (ej: "2026-04")
+  var mk=curMK(); 
+  var datePrefix = mk; 
+
+  // 1. Estadísticas de CUOTAS (quién pagó el mes que estamos mirando)
+  // Descontar a los inactivos
+  var activeMembers = members.filter(function(m) { return !isInactive(m, viewMonth, viewYear); });
+  var paidCount = 0;
+  activeMembers.forEach(function(m){
+    if(getMemberStatus(m.id)==='paid'){
+      paidCount++;
+    }
+  });
+
+  // 2. Estadísticas de CAJA (plata real que entró/salió según la fecha de pago)
+  var ingresosDelMes = 0;
+  var egresosDelMes = 0;
+  var otrosIngresosDelMes = 0;
+  var saldoAnterior = 0;
+
+  payments.forEach(function(p){
+    if(!p.date) return;
+    if(p.date.startsWith(datePrefix)){
+      ingresosDelMes += p.amount; // Entró este mes
+    } else if(p.date < datePrefix + '-01'){
+      saldoAnterior += p.amount; // Entró en meses anteriores
+    }
+  });
+
+  expenses.forEach(function(e){
+    if(!e.date) return;
+    var isIncome = e.amount < 0;
+    if(e.date.startsWith(datePrefix)){
+      if(isIncome){
+        otrosIngresosDelMes += Math.abs(e.amount); // Entró plata este mes (no por cuota)
+      } else {
+        egresosDelMes += e.amount; // Salió este mes
+      }
+    } else if(e.date < datePrefix + '-01'){
+      saldoAnterior -= e.amount; // Ingresos (negativos) se suman al saldo automáticamente
+    }
+  });
+
+  var totalBalance = saldoAnterior + ingresosDelMes + otrosIngresosDelMes - egresosDelMes;
+
+  // Armamos la tarjeta superior de FINANZAS (Flujo de caja real)
+  var finHTML='<div class="finance-card">';
+  finHTML+='<div class="finance-row"><span class="label">💰 Cuotas cobradas</span><span class="value green mono">$'+ingresosDelMes.toLocaleString('es-AR')+'</span></div>';
+
+  if(otrosIngresosDelMes>0){
+    finHTML+='<div class="finance-row"><span class="label">↩️ Otros ingresos</span><span class="value green mono">+$'+otrosIngresosDelMes.toLocaleString('es-AR')+'</span></div>';
+  }
+
+  if(egresosDelMes>0){
+    finHTML+='<div class="finance-row"><span class="label">🏠 Gastos (Pagados este mes)</span><span class="value red mono">-$'+egresosDelMes.toLocaleString('es-AR')+'</span></div>';
+  }
+  
+  if(saldoAnterior!==0){
+    finHTML+='<div class="finance-row"><span class="label">'+(saldoAnterior>=0?'📈':'📉')+' Saldo caja anterior</span><span class="value '+(saldoAnterior>=0?'blue':'red')+' mono">'+(saldoAnterior>=0?'$':'-$')+Math.abs(saldoAnterior).toLocaleString('es-AR')+'</span></div>';
+  }
+  
+  finHTML+='<hr class="finance-divider">';
+  finHTML+='<div class="finance-row total"><span class="label">Saldo total en cuenta</span><span class="value '+(totalBalance>=0?'blue':'red')+' mono">'+(totalBalance>=0?'$':'-$')+Math.abs(totalBalance).toLocaleString('es-AR')+'</span></div>';
+  finHTML+='</div>';
+  document.getElementById('financeSection').innerHTML=finHTML;
+
+  // Armamos los bloques del medio de CUOTAS
+  document.getElementById('statsStrip').innerHTML=
+    '<div class="stat-card"><div class="val green">'+paidCount+'/'+activeMembers.length+'</div><div class="lbl">Pagaron Cuota</div></div>'+
+    '<div class="stat-card"><div class="val yellow">'+(activeMembers.length-paidCount)+'</div><div class="lbl">Faltan Cuota</div></div>';
+
+  // Armamos los gastos y reintegros que se pagaron en este mes real
+  var monthExp = expenses.filter(function(e){ return e.date && e.date.startsWith(datePrefix); });
+  var headerTitle = otrosIngresosDelMes>0 ? 'Movimientos del mes' : 'Gastos pagados este mes';
+  var expHTML='<div class="expenses-header"><h3>'+headerTitle+'</h3><button class="admin-only" onclick="openAddExpense()">＋ Gasto / Ingreso</button></div>';
+
+  if(monthExp.length){
+    monthExp.forEach(function(e){
+      var isIncome = e.amount < 0;
+      var absAmt = Math.abs(e.amount);
+      var sign = isIncome ? '+' : '-';
+      var color = isIncome ? 'var(--accent)' : 'var(--danger)';
+      var icon = isIncome ? '↩️ ' : '';
+      expHTML+='<div class="expense-chip"><div class="left">'+icon+e.concept+'<span>'+formatDateFull(e.date)+(e.note?' · '+e.note:'')+'</span></div><div class="right" style="color:'+color+'">'+sign+'$'+absAmt.toLocaleString('es-AR')+'<button class="del admin-only" onclick="confirmDeleteExpense(\''+e.id+'\',\''+e.concept+'\')">✕</button></div></div>';
+    });
+  }else{
+    expHTML+='<div style="font-size:12px;color:var(--text3);padding:4px 0">Sin movimientos este mes</div>';
+  }
+  document.getElementById('expensesSection').innerHTML=expHTML;
+  
+  renderList();
+}
+
+function renderList(){
+  var search=document.getElementById('searchInput').value.toLowerCase().trim();
+  var container=document.getElementById('memberList');
+  
+  var filtered=members.filter(function(m){
+    // Filtro Baja Lógica: no se muestran si están dados de baja para este mes de vista
+    if(isInactive(m, viewMonth, viewYear)) return false;
+
+    var s=getMemberStatus(m.id);
+    if(activeFilter!=='all'&&s!==activeFilter)return false;
+    var hay=((m.nombre||'')+' '+(m.apellido||'')+' '+(m.name||'')).toLowerCase();
+    if(search&&!hay.includes(search))return false;
+    return true;
+  });
+  
+  var order={overdue:0,pending:1,paid:2};
+  filtered.sort(function(a,b){var sa=getMemberStatus(a.id),sb=getMemberStatus(b.id);if(order[sa]!==order[sb])return order[sa]-order[sb];return cmpByApellido(a,b)});
+  
+  if(!filtered.length){container.innerHTML='<div class="empty"><div class="icon">'+(!members.length?'👥':'🔍')+'</div><p>'+(!members.length?'No hay miembros.<br>Tocá <b>+ Miembro</b>.':'Sin resultados.')+'</p></div>';return}
+  
+  container.innerHTML=filtered.map(function(m,i){
+    var s=getMemberStatus(m.id),p=getPayment(m.id,curMK()),ini=initials(m);
+    var dueDay=getDueDay(viewMonth, viewYear);
+    var det=s==='paid'?'Pagó el '+formatDate(p.date)+(p.ref?' · #'+p.ref:''):s==='overdue'?'Venció el '+dueDay+' · Sin pago':'Vence el '+dueDay+'/'+(viewMonth+1);
+    return'<div class="member-card" style="animation-delay:'+(i*30)+'ms" onclick="openDetail(\''+m.id+'\')"><div class="avatar '+s+'">'+ini+'</div><div class="member-info"><div class="member-name">'+displayName(m)+'</div><div class="member-detail">'+det+'</div></div><span class="status-badge '+s+'">'+statusLabel(s)+'</span></div>';
+  }).join('');
+}
+
+function changeMonth(d){
+  var nextM=viewMonth+d, nextY=viewYear;
+  if(nextM>11){nextM=0;nextY++}
+  if(nextM<0){nextM=11;nextY--}
+  if(nextY<2026 || (nextY===2026 && nextM<2)) return;
+  viewMonth=nextM;viewYear=nextY;render()
+}
+function setFilter(f,btn){activeFilter=f;document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active')});btn.classList.add('active');renderList()}
+
+// ═══════ MEMBERS ═══════
+function openAddMember(){
+  _editingMemberId=null;document.getElementById('drawerTitle').textContent='Nuevo Miembro';
+  document.getElementById('fNombre').value='';document.getElementById('fApellido').value='';document.getElementById('fPhone').value='';document.getElementById('fAlias').value='';
+  document.getElementById('phoneError').classList.remove('show');document.getElementById('fPhone').classList.remove('error-border');
+  document.getElementById('drawerActions').innerHTML='<button class="btn btn-secondary" onclick="closeAllDrawers()">Cancelar</button><button class="btn btn-primary" id="btnSaveMember" onclick="saveMember()">✓ Guardar</button>';
+  openDrawer('memberDrawer');setTimeout(function(){document.getElementById('fNombre').focus()},350);
+}
+function openEditMember(id){
+  var m=members.find(function(x){return x.id===id});if(!m)return;_editingMemberId=id;
+  document.getElementById('drawerTitle').textContent='Editar Miembro';
+  document.getElementById('fNombre').value=m.nombre||'';document.getElementById('fApellido').value=m.apellido||'';document.getElementById('fPhone').value=m.phone||'';document.getElementById('fAlias').value=m.alias||'';
+  document.getElementById('phoneError').classList.remove('show');document.getElementById('fPhone').classList.remove('error-border');
+  
+  // Botón según estado: de baja → reactivar; con pagos → baja; sin pagos → eliminar
+  var hasPayments = payments.some(function(p){ return p.memberId === id; });
+  var btnAction = '';
+
+  if(isCurrentlyInactive(m)) {
+    btnAction = '<button class="btn btn-primary" onclick="reactivateMember(\''+id+'\')">♻️ Reactivar</button>';
+  } else if(!hasPayments) {
+    btnAction = '<button class="btn btn-danger" onclick="confirmDelete(\''+id+'\')">Eliminar</button>';
+  } else {
+    btnAction = '<button class="btn btn-warn" onclick="confirmDeactivate(\''+id+'\')">Dar de baja</button>';
+  }
+
+  document.getElementById('drawerActions').innerHTML = btnAction + '<button class="btn btn-primary" id="btnSaveMember" onclick="saveMember()">✓ Guardar</button>';
+  openDrawer('memberDrawer');
+}
+
+async function saveMember(){
+  var nombre=titleCase(document.getElementById('fNombre').value);
+  var apellido=titleCase(document.getElementById('fApellido').value);
+  if(!nombre){toast('⚠️ Ingresá el nombre',true);document.getElementById('fNombre').focus();return}
+  if(!apellido){toast('⚠️ Ingresá el apellido',true);document.getElementById('fApellido').focus();return}
+  // Reflejamos la versión capitalizada en los campos (por si se guardó sin salir del input)
+  document.getElementById('fNombre').value=nombre;
+  document.getElementById('fApellido').value=apellido;
+  var rawPhone=document.getElementById('fPhone').value.trim(),phone=cleanPhone(rawPhone),alias=document.getElementById('fAlias').value.trim();
+  if(rawPhone&&phone.length!==10){document.getElementById('fPhone').classList.add('error-border');document.getElementById('phoneError').classList.add('show');toast('⚠️ 10 dígitos requeridos',true);return}
+  var editId=_editingMemberId;
+  closeAllDrawers();
+  showAction(editId?'Actualizando miembro...':'Agregando miembro...');
+  try{
+    if(editId){await dbUpdateMember({id:editId,nombre:nombre,apellido:apellido,phone:phone,alias:alias})}
+    else{await dbAddMember({nombre:nombre,apellido:apellido,phone:phone,alias:alias})}
+    await syncData();
+    hideAction();toast(editId?'✏️ Actualizado':'✅ Agregado');
+  }catch(e){hideAction();toast('⚠️ ' + (e.message || 'Error al guardar'),true)}
+}
+
+function confirmDelete(id){
+  var m=members.find(function(x){return x.id===id});if(!m)return;
+  openConfirm({title:'¿Eliminar?',msg:'Se eliminará a "'+displayName(m)+'" y todos sus pagos.',btnText:'Eliminar',btnClass:'btn-danger',onConfirm:function(){deleteMember(id)}});
+}
+
+async function deleteMember(id){
+  closeConfirm();closeAllDrawers();showAction('Eliminando...');
+  try{
+    await dbDeleteMember(id);await syncData();
+    hideAction();toast('🗑️ Eliminado');
+  }catch(e){hideAction();toast('⚠️ ' + (e.message || 'Error'),true)}
+}
+
+function confirmDeactivate(id){
+  var m = members.find(function(x){return x.id===id}); if(!m) return;
+  openConfirm({title:'¿Dar de baja?',msg:'Se dará de baja a "'+displayName(m)+'". Su historial de pagos se conservará en el sistema.',btnText:'Dar de baja',btnClass:'btn-warn',onConfirm:function(){ deactivateMember(id) }});
+}
+
+async function deactivateMember(id){
+  closeConfirm(); closeAllDrawers(); showAction('Dando de baja...');
+  try{ await dbMembershipEvent(id, 'baja', localToday()); await syncData(); hideAction(); toast('📤 Dado de baja'); }
+  catch(e){ hideAction(); toast('⚠️ ' + (e.message || 'Error'),true); }
+}
+
+async function reactivateMember(id){
+  closeAllDrawers(); showAction('Reactivando...');
+  try{ await dbMembershipEvent(id, 'alta', localToday()); await syncData(); hideAction(); toast('✅ Reactivado'); }
+  catch(e){ hideAction(); toast('⚠️ ' + (e.message || 'Error'),true); }
+}
+
+// ═══════ PAYMENTS ═══════
+function buildPeriodSelectors(selMId,selYId,defM,defY){
+  var selM=document.getElementById(selMId),selY=document.getElementById(selYId);
+  selY.innerHTML='';
+  var thisY=new Date().getFullYear();
+  for(var y=2026;y<=thisY+1;y++){var o=document.createElement('option');o.value=y;o.textContent=y;if(y===defY)o.selected=true;selY.appendChild(o)}
+  var popM=function(){
+    var vy=parseInt(selY.value), curM=parseInt(selM.value)||defM;
+    selM.innerHTML='';
+    MONTHS.forEach(function(name,i){
+      if(vy===2026 && i<2) return;
+      var o=document.createElement('option');o.value=i;o.textContent=name;
+      if(i===curM) o.selected=true;
+      selM.appendChild(o);
+    });
+    if(!selM.value && selM.options.length>0) selM.selectedIndex=0;
+  };
+  selY.onchange = popM; // asignación (no addEventListener) para no acumular listeners al reabrir
+  popM();
+}
+function openPayment(id){
+  var m=members.find(function(x){return x.id===id});if(!m)return;
+  _payingMemberId=id;
+  document.getElementById('payForName').textContent=displayName(m);
+  document.getElementById('fPayDate').value=localToday();
+  document.getElementById('fPayRef').value='';document.getElementById('fPayNote').value='';
+  buildPeriodSelectors('fPayMonth','fPayYear',viewMonth,viewYear);
+  
+  var hint=function(){
+    var pm=parseInt(document.getElementById('fPayMonth').value), py=parseInt(document.getElementById('fPayYear').value);
+    var pDateStr = document.getElementById('fPayDate').value || localToday();
+    var dueDay = getDueDay(pm, py);
+    var dueStr = py + '-' + String(pm+1).padStart(2,'0') + '-' + String(dueDay).padStart(2,'0');
+    
+    var elAmount = document.getElementById('fPayAmount');
+    var hintEl = document.getElementById('lateHint');
+    if(!hintEl){
+      hintEl = document.createElement('div');
+      hintEl.id = 'lateHint';
+      hintEl.style = 'font-size:12px;color:var(--danger);margin-top:4px';
+      elAmount.parentNode.appendChild(hintEl);
+    }
+    
+    var fmtA = '$ ' + AMOUNT.toLocaleString('es-AR');       // cuota
+    hintEl.textContent = '';
+    if(elAmount.value === '') elAmount.value = fmtA;
+    formatCurrencyInput(elAmount);
+    
+    var now=new Date();
+    document.getElementById('periodHint').style.display=(pm!==now.getMonth()||py!==now.getFullYear())?'block':'none';
+  };
+  
+  // Asignación directa (no addEventListener) para no acumular handlers al reabrir el cajón.
+  document.getElementById('fPayMonth').onchange = hint;
+  document.getElementById('fPayDate').onchange = hint;
+  // El año ya tiene popM (reconstruye los meses); lo componemos con hint sin pisarlo.
+  var _selY = document.getElementById('fPayYear');
+  var _rebuildMonths = _selY.onchange; // popM, recién asignado por buildPeriodSelectors
+  _selY.onchange = function(){ _rebuildMonths(); hint(); };
+  hint();
+  document.getElementById('btnSavePay').disabled=false;
+  openDrawer('payDrawer');
+}
+async function savePayment(){
+  var memberId=_payingMemberId;if(!memberId){toast('⚠️ Error',true);return}
+  if(memberId.startsWith('temp_')){toast('⚠️ Esperá la sincronización',true);return}
+  var payMonth=parseInt(document.getElementById('fPayMonth').value),payYear=parseInt(document.getElementById('fPayYear').value);
+  var mk=mkKey(payMonth,payYear),date=document.getElementById('fPayDate').value;
+  var amount=parseInt(document.getElementById('fPayAmount').value.replace(/\D/g, ''))||AMOUNT;
+  var ref=document.getElementById('fPayRef').value.trim(),note=document.getElementById('fPayNote').value.trim();
+  if(!date){toast('⚠️ Seleccioná fecha',true);return}
+  if(getPayment(memberId,mk)){toast('⚠️ Ya pagó '+MONTHS[payMonth],true);return}
+  closeAllDrawers();
+  showAction('Registrando pago...');
+  try{
+    await dbAddPayment({memberId:memberId,month:mk,date:date,amount:amount,ref:ref,note:note});
+    await syncData();
+    hideAction();toast('💸 Pago de '+MONTHS[payMonth]+' registrado');
+  }catch(e){hideAction();toast('⚠️ ' + (e.message || 'Error al guardar pago'),true)}
+}
+async function removePayment(memberId,mk){
+  var parts=mk.split('-'),mIdx=parseInt(parts[1])-1;
+  openConfirm({title:'¿Anular pago?',msg:'Pago de '+MONTHS[mIdx]+' '+parts[0],btnText:'Anular',btnClass:'btn-danger',onConfirm:async function(){
+    closeConfirm();closeAllDrawers();showAction('Anulando pago...');
+    try{await dbDeletePayment(memberId,mk);await syncData();hideAction();toast('↩️ Anulado')}
+    catch(e){hideAction();toast('⚠️ ' + (e.message || 'Error'),true)}
+  }});
+}
+
+// ═══════ EXPENSES ═══════
+function openAddExpense(){
+  document.getElementById('fExpType').value='gasto';
+  document.getElementById('expenseDrawerTitle').textContent='Registrar Gasto';
+  document.getElementById('btnSaveExp').textContent='✓ Registrar';
+  document.getElementById('fExpConcept').value='Alquiler Rolling Code';
+  document.getElementById('fExpCustomWrap').style.display='none';
+  document.getElementById('fExpAmount').value='';document.getElementById('fExpDate').value=localToday();document.getElementById('fExpNote').value='';
+  buildPeriodSelectors('fExpMonth','fExpYear',viewMonth,viewYear);
+  document.getElementById('fExpConcept').onchange=function(){document.getElementById('fExpCustomWrap').style.display=this.value==='Otro'?'block':'none'};
+  document.getElementById('fExpType').onchange=function(){
+    var isIngreso=this.value==='reintegro';
+    document.getElementById('expenseDrawerTitle').textContent=isIngreso?'Registrar Ingreso':'Registrar Gasto';
+    document.getElementById('btnSaveExp').textContent=isIngreso?'✓ Ingresar':'✓ Registrar';
+  };
+  document.getElementById('btnSaveExp').disabled=false;
+  openDrawer('expenseDrawer');
+}
+async function saveExpense(){
+  var type=document.getElementById('fExpType').value;
+  var isIngreso=type==='reintegro';
+  var concept=document.getElementById('fExpConcept').value;
+  if(concept==='Otro'){concept=document.getElementById('fExpCustom').value.trim();if(!concept){toast('⚠️ Ingresá concepto',true);return}}
+  var expMonth=parseInt(document.getElementById('fExpMonth').value),expYear=parseInt(document.getElementById('fExpYear').value);
+  var mk=mkKey(expMonth,expYear),amount=parseInt(document.getElementById('fExpAmount').value.replace(/\D/g, ''));
+  var date=document.getElementById('fExpDate').value,note=document.getElementById('fExpNote').value.trim();
+  if(!amount||amount<=0){toast('⚠️ Ingresá monto',true);return}
+  if(!date){toast('⚠️ Seleccioná fecha',true);return}
+  if(isIngreso) amount=-amount;
+  closeAllDrawers();
+  showAction(isIngreso?'Registrando ingreso...':'Registrando gasto...');
+  try{
+    await dbAddExpense({month:mk,concept:concept,amount:amount,date:date,note:note});
+    await syncData();
+    hideAction();toast(isIngreso?'↩️ Ingreso registrado':'✅ Gasto registrado');
+  }catch(e){hideAction();toast('⚠️ ' + (e.message || 'Error al guardar'),true)}
+}
+async function confirmDeleteExpense(id,concept){
+  var exp=expenses.find(function(x){return x.id===id});
+  var isIncome=exp && exp.amount<0;
+  openConfirm({title:isIncome?'¿Eliminar ingreso?':'¿Eliminar gasto?',msg:'"'+concept+'"',btnText:'Eliminar',btnClass:'btn-danger',onConfirm:async function(){
+    closeConfirm();showAction(isIncome?'Eliminando ingreso...':'Eliminando gasto...');
+    try{await dbDeleteExpense(id);await syncData();hideAction();toast('🗑️ Eliminado')}
+    catch(e){hideAction();toast('⚠️ ' + (e.message || 'Error'),true)}
+  }});
+}
+
+// ═══════ DETAIL ═══════
+function openDetail(id){
+  var m=members.find(function(x){return x.id===id});if(!m)return;
+  var s=getMemberStatus(id),ini=initials(m);
+  var hasPhone=cleanPhone(m.phone).length===10;
+  var isBaja = isCurrentlyInactive(m);
+  
+  var hist='<h4 style="font-size:14px;color:var(--text2);margin:20px 0 10px;text-transform:uppercase;letter-spacing:.3px">Historial</h4>';
+
+  // Renderiza una fila de mes pagado (reutilizada por el adelanto y el historial hacia atrás).
+  function renderPaid(mo,y,hp){
+    var hk=mkKey(mo,y);
+    var rcpt=receiptMsg(displayName(m),mo,y,hp.date,hp.amount,hp.ref);
+    var waBtn=hasPhone?'<a href="'+waLink(m.phone,rcpt)+'" target="_blank" class="btn-mini-wa">📱 Recibo</a>':'';
+    return '<div class="history-item"><div class="history-row"><div class="left">'+MONTHS[mo]+' '+y+'<span>'+formatDateFull(hp.date)+(hp.ref?' · #'+hp.ref:'')+(hp.note?' · '+hp.note:'')+'</span></div><div class="right paid">$'+hp.amount.toLocaleString('es-AR')+'</div></div><div class="history-actions">'+waBtn+'<button class="btn-mini-danger admin-only" onclick="event.stopPropagation();removePayment(\''+id+'\',\''+hk+'\')">✕ Anular</button></div></div>';
+  }
+
+  // Meses pagados por adelantado (posteriores al mes en vista): se muestran arriba, el más futuro primero.
+  var fmo=viewMonth,fy=viewYear,ahead=[];
+  for(var j=0;j<12;j++){
+    fmo++;if(fmo>11){fmo=0;fy++}
+    var fp=getPayment(id,mkKey(fmo,fy));
+    if(fp) ahead.unshift(renderPaid(fmo,fy,fp));
+  }
+  hist+=ahead.join('');
+
+  var y=viewYear,mo=viewMonth;
+  for(var i=0;i<12;i++){
+    var hk=mkKey(mo,y);
+    if(hk<'2026-03') break;
+    var hp=getPayment(id,hk);
+    if(hp){
+      hist+=renderPaid(mo,y,hp);
+    }else{
+      if (isInactive(m, mo, y)) {
+         hist+='<div class="history-item"><div class="history-row"><div class="left" style="color:var(--text3)">'+MONTHS[mo]+' '+y+'<span>Baja Lógica</span></div><div class="right" style="color:var(--text3)">—</div></div></div>';
+      } else {
+         var moDueDay=getDueDay(mo, y);
+         var isPastMo=(y<new Date().getFullYear())||(y===new Date().getFullYear()&&mo<=new Date().getMonth());
+         var isMoOverdue=(isPastMo && localToday()>(y+'-'+String(mo+1).padStart(2,'0')+'-'+String(moDueDay).padStart(2,'0')));
+         var dueText = isMoOverdue ? ('Venció el '+moDueDay) : ('Vence el '+moDueDay+'/'+(mo+1));
+         hist+='<div class="history-item"><div class="history-row"><div class="left" style="color:var(--text3)">'+MONTHS[mo]+' '+y+'<span>'+dueText+'</span></div><div class="right" style="color:var(--text3)">—</div></div></div>';
+      }
+    }
+    mo--;if(mo<0){mo=11;y--}
+  }
+  
+  var viewDueDay = getDueDay(viewMonth, viewYear);
+  var remAmt = AMOUNT;
+  var firstName = m.nombre || (m.name||'').split(' ')[0] || '';
+  var reminderMsg='Hola '+firstName+' 👋\n\nTe escribo del *Consejo Ciudadano*. La cuota de *'+MONTHS[viewMonth]+' '+viewYear+'* ($'+remAmt.toLocaleString('es-AR')+') está pendiente.\nVencimiento: *'+viewDueDay+'/'+(viewMonth+1)+'/'+viewYear+'*.\n\n¡Gracias!';
+  
+  var reminderBtn=(hasPhone&&s!=='paid'&&!isInactive(m, viewMonth, viewYear))?'<a href="'+waLink(m.phone,reminderMsg)+'" target="_blank" class="btn btn-wa admin-only" style="text-decoration:none;font-size:13px;padding:10px 16px">📱 Recordar</a>':'';
+  var waGen=hasPhone?'<a href="'+waLink(m.phone,'')+'" target="_blank" class="btn btn-secondary admin-only" style="text-decoration:none;font-size:13px;padding:10px 16px">💬</a>':'';
+  
+  // Botones principales (Pagar o Reactivar)
+  var reactivateBtn = isBaja ? '<button class="btn btn-primary admin-only" style="font-size:13px;padding:10px 16px;flex:1" onclick="reactivateMember(\''+id+'\')">♻️ Reactivar</button>' : '';
+  var payBtn = !isInactive(m, viewMonth, viewYear) ? '<button class="btn btn-primary admin-only" style="font-size:13px;padding:10px 16px;flex:1" onclick="openPayment(\''+id+'\')">💸 Pago</button>' : '';
+  
+  // Badge de baja vigente
+  var bajaD = currentBajaDate(m);
+  var statusBadgeStr = bajaD ? '<div style="margin-top:6px"><span style="background:var(--warn);color:var(--bg);padding:4px 8px;border-radius:6px;font-size:11px;font-weight:bold;text-transform:uppercase;letter-spacing:0.3px">📤 Baja: '+formatDateFull(bajaD)+'</span></div>' : '';
+
+  // Historial de altas y bajas
+  var evs = getHistory(m);
+  var histListStr = '';
+  if(evs.length){
+    histListStr = '<h4 style="font-size:14px;color:var(--text2);margin:20px 0 10px;text-transform:uppercase;letter-spacing:.3px">Altas y bajas</h4>';
+    evs.slice().reverse().forEach(function(e){
+      var ic = e.t==='baja' ? '📤 Baja' : '♻️ Alta';
+      histListStr += '<div class="history-item"><div class="history-row"><div class="left">'+ic+'</div><div class="right" style="color:var(--text2)">'+formatDateFull(e.d)+'</div></div></div>';
+    });
+  }
+
+  document.getElementById('detailContent').innerHTML=
+    '<div class="detail-header"><div class="big-avatar avatar '+(isBaja?'inactive':s)+'">'+ini+'</div><div class="info"><h3>'+displayName(m)+'</h3><p>'+(hasPhone?formatPhoneDisplay(m.phone):'Sin teléfono')+(m.alias?' · '+m.alias:'')+'</p>'+statusBadgeStr+'</div></div>'+
+    '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
+    payBtn + reactivateBtn +
+    reminderBtn+waGen+
+    '<button class="btn btn-secondary admin-only" style="font-size:13px;padding:10px 16px" onclick="openEditMember(\''+id+'\')">✏️</button></div>'+histListStr+hist;
+  openDrawer('detailDrawer');
+}
+
+// ═══════ EXPORT ═══════
+function openExport(){openDrawer('exportDrawer')}
+
+function exportWhatsApp(){
+  var currentMonthStr = String(viewMonth+1).padStart(2,'0');
+  var datePrefix = viewYear + '-' + currentMonthStr; 
+
+  var pagosDelMes = [];
+  var gastosDelMes = [];
+  var otrosIngresosDelMes = [];
+  var saldoAnterior = 0;
+
+  payments.forEach(function(p){
+    if(!p.date) return;
+    if(p.date.startsWith(datePrefix)){
+      pagosDelMes.push(p);
+    } else if(p.date < datePrefix + '-01'){
+      saldoAnterior += p.amount;
+    }
+  });
+
+  expenses.forEach(function(e){
+    if(!e.date) return;
+    if(e.date.startsWith(datePrefix)){
+      if(e.amount < 0) otrosIngresosDelMes.push(e);
+      else gastosDelMes.push(e);
+    } else if(e.date < datePrefix + '-01'){
+      saldoAnterior -= e.amount;
+    }
+  });
+
+  var text='📋 *Reporte de Caja - Consejo Ciudadano*\n*Movimientos de '+MONTHS[viewMonth]+' '+viewYear+'*\n\n';
+
+  var totalIngresos = 0;
+  var totalEgresos = 0;
+  var totalOtrosIngresos = 0;
+
+  if(pagosDelMes.length > 0){
+    text+='✅ *CUOTAS COBRADAS ('+pagosDelMes.length+')*\n';
+    pagosDelMes.sort(function(a,b){return a.date.localeCompare(b.date)});
+    pagosDelMes.forEach(function(p){
+      var m = members.find(function(x){return x.id === p.memberId});
+      var mName = m ? displayName(m) : 'Desconocido';
+      var pMonth = parseInt(p.month.split('-')[1]) - 1;
+      var pYear = p.month.split('-')[0];
+      text+='  • '+mName+' ($'+p.amount.toLocaleString('es-AR')+') — '+formatDateFull(p.date)+' — Cuota: '+MONTHS[pMonth]+' '+pYear+'\n';
+      totalIngresos += p.amount;
+    });
+    text+='\n';
+  } else {
+    text+='✅ *CUOTAS COBRADAS*\n  • Sin cuotas cobradas este mes\n\n';
+  }
+
+  if(otrosIngresosDelMes.length > 0){
+    text+='↩️ *OTROS INGRESOS ('+otrosIngresosDelMes.length+')*\n';
+    otrosIngresosDelMes.sort(function(a,b){return a.date.localeCompare(b.date)});
+    otrosIngresosDelMes.forEach(function(e){
+      var amt = Math.abs(e.amount);
+      text+='  • '+e.concept+': +$'+amt.toLocaleString('es-AR')+' — '+formatDateFull(e.date)+(e.note?' — '+e.note:'')+'\n';
+      totalOtrosIngresos += amt;
+    });
+    text+='\n';
+  }
+
+  if(gastosDelMes.length > 0){
+    text+='🏠 *EGRESOS ('+gastosDelMes.length+')*\n';
+    gastosDelMes.forEach(function(e){
+      text+='  • '+e.concept+': -$'+e.amount.toLocaleString('es-AR')+' — '+formatDateFull(e.date)+'\n';
+      totalEgresos += e.amount;
+    });
+    text+='\n';
+  }
+
+  text+='━━━━━━━━━━━━━━\n';
+  text+='💰 Cuotas cobradas: $'+totalIngresos.toLocaleString('es-AR')+'\n';
+  if(totalOtrosIngresos > 0) text+='↩️ Otros ingresos: +$'+totalOtrosIngresos.toLocaleString('es-AR')+'\n';
+  if(totalEgresos > 0) text+='🏠 Egresos del mes: -$'+totalEgresos.toLocaleString('es-AR')+'\n';
+  
+  if(saldoAnterior !== 0) {
+    text+=(saldoAnterior>=0?'📈':'📉')+' Saldo cuenta anterior: '+(saldoAnterior>=0?'$':'-$')+Math.abs(saldoAnterior).toLocaleString('es-AR')+'\n';
+  }
+  
+  var saldoCaja = saldoAnterior + totalIngresos + totalOtrosIngresos - totalEgresos;
+  text+='💵 *Saldo Total en Cuenta: '+(saldoCaja>=0?'$':'-$')+Math.abs(saldoCaja).toLocaleString('es-AR')+'*\n\n';
+  text+='📅 _Generado: '+localNow()+'_';
+
+  navigator.clipboard.writeText(text).then(function(){
+    toast('📋 Copiado');closeAllDrawers();
+  }).catch(function(){
+    var ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);toast('📋 Copiado');closeAllDrawers();
+  });
+}
+
+function exportPendientes(){
+  var mk = curMK();
+  var dueDay = getDueDay(viewMonth, viewYear);
+  // No contar a los que están dados de baja
+  var pendientes = members.filter(function(m){ 
+      return !isInactive(m, viewMonth, viewYear) && getMemberStatus(m.id) !== 'paid'; 
+  });
+  pendientes.sort(cmpByApellido);
+
+  var text = '⚠️ *Cuotas pendientes - '+MONTHS[viewMonth]+' '+viewYear+'*\n';
+  text += '_Vencimiento: '+dueDay+'/'+(viewMonth+1)+'/'+viewYear+'_\n\n';
+
+  // Total de activos
+  var activeMembers = members.filter(function(m) { return !isInactive(m, viewMonth, viewYear); });
+
+  if(pendientes.length === 0){
+    text += '✅ ¡Todos pagaron este mes!\n';
+  } else {
+    text += '*Faltan pagar ('+pendientes.length+'/'+activeMembers.length+'):*\n';
+    pendientes.forEach(function(m){
+      var s = getMemberStatus(m.id);
+      var icon = s === 'overdue' ? '🔴' : '🟡';
+      text += icon+' '+displayName(m)+'\n';
+    });
+    text += '\n_💡 Cuota: $'+AMOUNT.toLocaleString('es-AR')+'_';
+  }
+
+  text += '\n\n📅 _'+localNow()+'_';
+
+  navigator.clipboard.writeText(text).then(function(){
+    toast('📋 Copiado');closeAllDrawers();
+  }).catch(function(){
+    var ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);toast('📋 Copiado');closeAllDrawers();
+  });
+}
+
+function exportCSV(){
+  var currentMonthStr = String(viewMonth+1).padStart(2,'0');
+  var datePrefix = viewYear + '-' + currentMonthStr;
+
+  var pagosDelMes = payments.filter(function(p) { return p.date && p.date.startsWith(datePrefix); });
+  var movDelMes = expenses.filter(function(e) { return e.date && e.date.startsWith(datePrefix); });
+  var gastosDelMes = movDelMes.filter(function(e){ return e.amount >= 0; });
+  var otrosIngresosDelMes = movDelMes.filter(function(e){ return e.amount < 0; });
+
+  var csv='Flujo de Caja - '+MONTHS[viewMonth]+' '+viewYear+'\n\nCuotas Cobradas\nNombre,Monto,FechaDePago,CuotaQueAbono,Comprobante\n';
+
+  pagosDelMes.forEach(function(p){
+    var m = members.find(function(x){return x.id === p.memberId});
+    var mName = m ? displayName(m) : 'Desconocido';
+    var pMonth = MONTHS[parseInt(p.month.split('-')[1]) - 1] + ' ' + p.month.split('-')[0];
+    csv+='"'+mName+'","'+p.amount+'","'+p.date+'","'+pMonth+'","'+(p.ref||'')+'"\n';
+  });
+
+  if(otrosIngresosDelMes.length){
+    csv+='\nOtros Ingresos\nConcepto,Monto,Fecha,Nota\n';
+    otrosIngresosDelMes.forEach(function(e){
+      csv+='"'+e.concept+'","'+Math.abs(e.amount)+'","'+e.date+'","'+(e.note||'')+'"\n';
+    });
+  }
+
+  csv+='\nEgresos\nConcepto,Monto,Fecha,Nota\n';
+  gastosDelMes.forEach(function(e){
+    csv+='"'+e.concept+'","'+e.amount+'","'+e.date+'","'+(e.note||'')+'"\n';
+  });
+
+  var blob=new Blob([csv],{type:'text/csv'}),url=URL.createObjectURL(blob),a=document.createElement('a');
+  a.href=url;a.download='caja_'+datePrefix+'.csv';a.click();URL.revokeObjectURL(url);
+  toast('📥 Descargado');closeAllDrawers();
+}
+
+// ═══════ LOGO (base64) ═══════
+var LOGO_B64 = 'data:image/png;base64,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';
+var LOGO_W = 280, LOGO_H = 256; 
+
+// ═══════ PDF PLANILLA ANUAL ═══════
+function exportMembershipPDF(){
+  if(!window.jspdf){
+    toast('⚠️ Librería PDF no cargó. Probá de nuevo.', true);
+    return;
+  }
+  if(!members.length){
+    toast('⚠️ No hay miembros para listar', true);
+    return;
+  }
+
+  var jsPDF = window.jspdf.jsPDF;
+  var doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  var year = viewYear;
+  var pageW = doc.internal.pageSize.getWidth();
+
+  var logoH = 18;
+  var logoW = logoH * (LOGO_W / LOGO_H);
+  try {
+    doc.addImage(LOGO_B64, 'PNG', (pageW - logoW)/2, 6, logoW, logoH);
+  } catch(err) {
+    console.warn('No se pudo insertar logo:', err);
+  }
+  doc.setFont('helvetica','bold');
+  doc.setFontSize(13);
+  doc.text('PAGO DE MEMBRESIA ' + year, pageW/2, 6 + logoH + 6, {align:'center'});
+
+  var head = [['N°','Apellidos y Nombres','Teléfono','1°','2°','3°','4°','5°','6°','7°','8°','9°','10°','11°','12°']];
+
+  // Mostramos: activos hoy + los de baja que tengan al menos un pago en el año
+  // (así un miembro que pagó y se dio de baja el mismo mes conserva su registro en la planilla)
+  var relevantMembers = members.filter(function(m){
+    if (!isCurrentlyInactive(m)) return true;
+    return payments.some(function(p){ return p.memberId === m.id && p.month && p.month.startsWith(String(year)); });
+  });
+
+  if(!relevantMembers.length){
+    toast('⚠️ No hay miembros para listar', true);
+    return;
+  }
+
+  // Orden alfabético por apellido y, si coincide, por nombre
+  var sorted = relevantMembers.slice().sort(cmpByApellido);
+
+  var body = sorted.map(function(m, idx){
+    var mName = displayName(m); // "Apellido, Nombre"
+    var bajaD = currentBajaDate(m);
+    if (bajaD) {
+       var bM = parseInt(bajaD.split('-')[1], 10) - 1;
+       mName += ' (baja ' + MONTHS[bM].toLowerCase().substr(0,3) + ')';
+    }
+
+    var row = [
+      idx + 1,
+      mName,
+      m.phone ? formatPhoneDisplay(m.phone) : ''
+    ];
+
+    for(var month = 0; month < 12; month++){
+      var mk = mkKey(month, year);
+      if(getPayment(m.id, mk)) row.push('✓');            // pagó ese mes (aunque después se diera de baja)
+      else if(isInactive(m, month, year)) row.push('—'); // de baja ese mes
+      else row.push('');                                  // activo y sin pagar
+    }
+    return row;
+  });
+
+  doc.autoTable({
+    head: head,
+    body: body,
+    startY: 32,
+    theme: 'grid',
+    styles: {
+      font: 'helvetica',
+      fontSize: 8,
+      cellPadding: 1.8,
+      halign: 'center',
+      valign: 'middle',
+      lineColor: [80,80,80],
+      lineWidth: 0.2
+    },
+    headStyles: {
+      fillColor: [230,230,230],
+      textColor: [0,0,0],
+      fontStyle: 'bold',
+      lineColor: [80,80,80],
+      lineWidth: 0.2
+    },
+    columnStyles: {
+      0: { cellWidth: 9 },
+      1: { cellWidth: 60, halign: 'left' },
+      2: { cellWidth: 28 },
+      3: { cellWidth: 14 },
+      4: { cellWidth: 14 },
+      5: { cellWidth: 14 },
+      6: { cellWidth: 14 },
+      7: { cellWidth: 14 },
+      8: { cellWidth: 14 },
+      9: { cellWidth: 14 },
+      10:{ cellWidth: 14 },
+      11:{ cellWidth: 14 },
+      12:{ cellWidth: 14 },
+      13:{ cellWidth: 14 },
+      14:{ cellWidth: 14 }
+    },
+    didParseCell: function(data){
+      if(data.section === 'body' && data.column.index >= 3){
+        if(data.cell.raw === '✓'){
+          // Ocultamos el texto — el tilde se dibuja como vector en didDrawCell
+          data.cell.text = [''];
+          data.cell.styles.fillColor = [240, 255, 247]; // fondo verde suave
+        }
+        if(data.cell.raw === '—'){
+          data.cell.styles.textColor = [150, 150, 150];
+        }
+      }
+    },
+    didDrawCell: function(data){
+      if(data.section === 'body' && data.column.index >= 3 && data.cell.raw === '✓'){
+        // Dibujamos el tilde como dos líneas vectoriales (no depende de fuente)
+        var cx = data.cell.x + data.cell.width / 2;
+        var cy = data.cell.y + data.cell.height / 2;
+        doc.setDrawColor(25, 135, 84);
+        doc.setLineWidth(0.7);
+        // Trazo corto (pata izquierda del tilde): ↘
+        doc.line(cx - 1.6, cy + 0.1, cx - 0.3, cy + 1.3);
+        // Trazo largo (pata derecha del tilde): ↗
+        doc.line(cx - 0.3, cy + 1.3, cx + 2.0, cy - 1.2);
+      }
+    },
+    didDrawPage: function(data){
+      var pageH = doc.internal.pageSize.getHeight();
+      doc.setFontSize(8);
+      doc.setFont('helvetica','normal');
+      doc.setTextColor(100,100,100);
+      doc.text('Generado: ' + localNow(), 14, pageH - 6);
+      doc.text('Página ' + doc.internal.getNumberOfPages(), pageW - 14, pageH - 6, {align:'right'});
+      doc.setTextColor(0,0,0);
+    }
+  });
+
+  var finalY = doc.lastAutoTable.finalY || 26;
+  var pageH = doc.internal.pageSize.getHeight();
+  if(finalY + 20 < pageH - 15){
+    var activosCount = members.filter(function(m){ return !isCurrentlyInactive(m); }).length;
+    var pagosAnio = payments.filter(function(p){
+      return p.month && p.month.startsWith(String(year));
+    }).length;
+    doc.setFont('helvetica','bold');
+    doc.setFontSize(9);
+    doc.text('Miembros activos: ' + activosCount + '   |   En planilla: ' + relevantMembers.length + '   |   Cuotas pagadas en ' + year + ': ' + pagosAnio, 14, finalY + 8);
+  }
+
+  // ── Descarga / compartir compatible con todos los dispositivos ──
+  var _hoy = new Date();
+  var _dd = String(_hoy.getDate()).padStart(2,'0');
+  var _mm = String(_hoy.getMonth()+1).padStart(2,'0');
+  var filename = 'Pago_Membresia_' + year + '_' + _dd + '-' + _mm + '.pdf';
+  var pdfBlob = doc.output('blob');
+
+  var isIOS     = /ipad|iphone|ipod/i.test(navigator.userAgent) && !window.MSStream;
+  var isAndroid = /android/i.test(navigator.userAgent);
+  var isMobile  = isIOS || isAndroid;
+
+  // 1️⃣ MÓVIL + Web Share API con archivos → panel nativo iOS/Android
+  //    (WhatsApp, Mail, AirDrop, Guardar en Archivos…)
+  if (isMobile && navigator.canShare) {
+    var pdfFile = new File([pdfBlob], filename, { type: 'application/pdf' });
+    if (navigator.canShare({ files: [pdfFile] })) {
+      navigator.share({
+        files: [pdfFile],
+        title: 'Planilla Anual ' + year,
+        text: 'Consejo Ciudadano — Planilla de membresías ' + year
+      }).then(function() {
+        toast('✅ PDF compartido');
+      }).catch(function(err) {
+        if (err.name !== 'AbortError') {
+          toast('⚠️ No se pudo compartir', true);
+        }
+      });
+      closeAllDrawers();
+      return;
+    }
+  }
+
+  // 2️⃣ DESKTOP o Android sin Share API → descarga directa por blob
+  //    Windows, Mac, Linux, Chrome/Firefox/Edge: siempre descarga el archivo
+  if (!isIOS) {
+    var url = URL.createObjectURL(pdfBlob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function(){ URL.revokeObjectURL(url); document.body.removeChild(a); }, 2000);
+    toast('📄 PDF descargado');
+    closeAllDrawers();
+    return;
+  }
+
+  // 3️⃣ iOS antiguo sin Web Share API → abrir data URI en nueva pestaña
+  //    Desde ahí tocar ⬆ Compartir → WhatsApp / Guardar en Archivos
+  var reader = new FileReader();
+  reader.onload = function() {
+    var win = window.open('', '_blank');
+    if (win) {
+      win.document.write(
+        '<html><head><title>' + filename + '</title>' +
+        '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+        '<style>body{margin:0;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;background:#1a1a2e;font-family:sans-serif;color:#fff;gap:16px}' +
+        'p{font-size:13px;color:#aaa;text-align:center;padding:0 20px}' +
+        'iframe{width:100vw;height:70vh;border:none;display:block}</style>' +
+        '</head><body>' +
+        '<iframe src="' + reader.result + '"></iframe>' +
+        '<p>Tocá el botón ⬆ Compartir de Safari para enviarlo por WhatsApp o guardarlo en Archivos.</p>' +
+        '</body></html>'
+      );
+      win.document.close();
+      toast('📄 Abrí el ⬆ Compartir para enviarlo por WhatsApp');
+    } else {
+      toast('⚠️ Permitir ventanas emergentes para descargar', true);
+    }
+  };
+  reader.readAsDataURL(pdfBlob);
+  closeAllDrawers();
+}
+
+// ═══════ INIT ═══════
+loadCache();
+(async function(){
+  var loader=document.getElementById('loadingScreen');
+  await checkAuth();            // resuelve rol admin/viewer según sesión de Supabase
+  render();                     // pinta ya mismo con la caché local (arranque instantáneo)
+  try{
+    document.getElementById('loadingMsg').textContent='Cargando...';
+    await syncData();
+    loader.classList.add('hidden');
+  }catch(e){
+    document.getElementById('loadingMsg').innerHTML='<span style="color:var(--danger)">⚠️ Error. Usando caché.</span>';
+    setTimeout(function(){loader.classList.add('hidden')},2000);
+    render();
+  }
+})();
+</script>
+</body>
+</html>
