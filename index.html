@@ -79,6 +79,15 @@ body{min-height:100dvh;padding-bottom:calc(80px + var(--safe-bottom))}
 .stat-card .lbl{font-size:11px;color:var(--text2);margin-top:2px;text-transform:uppercase;letter-spacing:.3px}
 
 .expenses-section{padding:6px 20px 4px}
+.cobros-strip{padding:6px 20px 4px}
+.cobro-chip{background:var(--surface);border-radius:12px;padding:12px 14px;margin-bottom:8px;cursor:pointer}
+.cobro-chip:active{transform:scale(.99)}
+.cobro-chip .top{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:8px}
+.cobro-chip .nm{font-size:14px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cobro-chip .dt{font-size:11px;color:var(--text2);flex-shrink:0}
+.cobro-chip .bot{display:flex;justify-content:space-between;font-size:12px;margin-top:6px}
+.btn-row-pay{background:rgba(34,214,138,.14);color:var(--accent);border:none;width:36px;height:36px;border-radius:10px;font-size:15px;cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center}
+.btn-row-pay:active{transform:scale(.92)}
 .expenses-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
 .expenses-header h3{font-size:13px;color:var(--text2);text-transform:uppercase;letter-spacing:.3px}
 .expenses-header button{background:var(--surface);border:none;color:var(--blue);font-size:12px;font-weight:700;padding:6px 12px;border-radius:8px;cursor:pointer;font-family:inherit}
@@ -260,6 +269,7 @@ body.role-viewer { padding-bottom: calc(20px + var(--safe-bottom)); }
 
 <div class="finance" id="financeSection"></div>
 <div class="stats" id="statsStrip"></div>
+<div class="cobros-strip" id="cobrosStrip"></div>
 <div class="expenses-section" id="expensesSection"></div>
 
 <div class="search-wrap">
@@ -947,6 +957,7 @@ function render(){
   }
   document.getElementById('expensesSection').innerHTML=expHTML;
 
+  renderCobrosStrip();
   renderCobros(); // no-op si la vista de cobros está cerrada
   
   renderList();
@@ -1246,7 +1257,40 @@ function closeCobros(){
   _cobrosOpen=false;
   document.getElementById('cobrosView').classList.remove('open');
 }
-function openCobroDetail(id){_viewCobroId=id;renderCobros();window.scrollTo(0,0)}
+// Abre la vista de cobros directamente en uno (desde la tira de la principal o al crearlo).
+function showCobro(id){
+  _cobrosOpen=true;_viewCobroId=id;
+  document.getElementById('cobrosView').classList.add('open');
+  window.scrollTo(0,0);renderCobros();
+}
+function openCobroDetail(id){showCobro(id)}
+
+// ── Tira de eventos activos en la pantalla principal ──
+function renderCobrosStrip(){
+  var abiertos=cobros.filter(function(c){return !c.cerrado});
+  var activos=cobroMembers();
+  var h='<div class="expenses-header"><h3>Eventos</h3>'+
+        '<button class="admin-only" onclick="openAddCobro()">＋ Evento</button></div>';
+  if(!abiertos.length){
+    h+='<div style="font-size:12px;color:var(--text3);padding:4px 0">Sin eventos activos</div>';
+  }else{
+    abiertos.sort(function(a,b){return (a.fechaEvento||'9999').localeCompare(b.fechaEvento||'9999')});
+    abiertos.forEach(function(c){
+      var rec=cobroTotal(c.id);
+      var pagaron=activos.filter(function(m){return cobroStatus(c,m.id)==='paid'}).length;
+      var objetivo=c.monto>0?c.monto*activos.length:0;
+      var pct=objetivo>0?Math.min(100,Math.round(rec/objetivo*100)):(rec>0?100:0);
+      h+='<div class="cobro-chip" onclick="showCobro(\''+c.id+'\')">'+
+         '<div class="top"><span class="nm">🍽️ '+c.nombre+'</span>'+
+         '<span class="dt">'+(c.fechaEvento?formatDateFull(c.fechaEvento):'Sin fecha')+'</span></div>'+
+         '<div class="progress"><i style="width:'+pct+'%"></i></div>'+
+         '<div class="bot"><span class="mono" style="color:var(--accent);font-weight:700">$'+rec.toLocaleString('es-AR')+
+         (objetivo>0?'<span style="color:var(--text3);font-weight:400"> de $'+objetivo.toLocaleString('es-AR')+'</span>':'')+'</span>'+
+         '<span style="color:var(--text2)">'+pagaron+'/'+activos.length+' pagaron</span></div></div>';
+    });
+  }
+  document.getElementById('cobrosStrip').innerHTML=h;
+}
 
 // ── Render ──
 function renderCobros(){
@@ -1333,9 +1377,12 @@ function cobroDetailHTML(c){
     var det=paid>0
       ? 'Aportó $'+paid.toLocaleString('es-AR')+(st==='partial'?' · falta $'+(c.monto-paid).toLocaleString('es-AR'):'')
       : 'Sin aportes';
+    // 💸 al lado del nombre: registra el aporte sin pasar por la ficha (2 toques menos).
+    var quickPay=c.cerrado?'':'<button class="btn-row-pay admin-only" title="Registrar aporte" onclick="event.stopPropagation();openCobroPayment(\''+m.id+'\')">💸</button>';
     return '<div class="member-card" style="animation-delay:'+(i*25)+'ms" onclick="openCobroMember(\''+m.id+'\')">'+
       '<div class="avatar '+st+'">'+initials(m)+'</div>'+
       '<div class="member-info"><div class="member-name">'+displayName(m)+'</div><div class="member-detail">'+det+'</div></div>'+
+      quickPay+
       '<span class="status-badge '+st+'">'+cobroStatusLabel(st)+'</span></div>';
   }).join('');
   return h;
@@ -1414,10 +1461,12 @@ async function saveCobro(){
   var editId=_editingCobroId;
   closeAllDrawers();showAction(editId?'Actualizando cobro...':'Creando cobro...');
   try{
+    var newId=null;
     if(editId){await dbUpdateCobro({id:editId,nombre:nombre,monto:monto,fechaEvento:fecha})}
-    else{var r=await dbAddCobro({nombre:nombre,monto:monto,fechaEvento:fecha});_viewCobroId=r.id}
+    else{var r=await dbAddCobro({nombre:nombre,monto:monto,fechaEvento:fecha});newId=r.id}
     await syncData();
     hideAction();toast(editId?'✏️ Actualizado':'✅ Cobro creado');
+    if(newId) showCobro(newId); // recién creado: entra directo, sin buscarlo en la lista
   }catch(e){hideAction();toast('⚠️ '+(e.message||'Error al guardar'),true)}
 }
 async function toggleCobroCerrado(id){

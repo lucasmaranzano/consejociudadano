@@ -50,6 +50,14 @@ create policy "cobro_pagos_select" on public.cobro_pagos
 create policy "cobro_pagos_write"  on public.cobro_pagos
   for all to authenticated using (true) with check (true);
 
+-- GRANTS: la capa gruesa de permisos, previa a RLS.
+-- Sin esto PostgREST devuelve 403 aunque las policies esten bien.
+-- (Supabase los aplica solo al crear tablas desde el Dashboard.)
+grant select on public.cobros      to anon, authenticated;
+grant select on public.cobro_pagos to anon, authenticated;
+grant insert, update, delete on public.cobros      to authenticated;
+grant insert, update, delete on public.cobro_pagos to authenticated;
+
 -- Realtime: para que el 🍽️ se actualice solo en los otros celulares.
 do $$
 begin
