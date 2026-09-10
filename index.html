@@ -179,6 +179,24 @@ body{min-height:100dvh;padding-bottom:calc(80px + var(--safe-bottom))}
 .period-hint{font-size:12px;color:var(--warn);margin-top:-8px;margin-bottom:14px;padding:8px 12px;background:rgba(245,166,35,.08);border-radius:8px;line-height:1.4}
 ::-webkit-scrollbar{width:0;height:0}
 
+/* Cobros puntuales (cena, rifa, regalo...) */
+.cobros-view{position:fixed;inset:0;background:var(--bg);z-index:150;overflow-y:auto;padding:0 20px calc(40px + var(--safe-bottom));display:none}
+.cobros-view.open{display:block}
+.cobros-bar{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--surface2);padding:16px 0 12px;margin-bottom:14px;display:flex;align-items:center;gap:12px;z-index:2}
+.cobros-bar h2{font-size:18px;font-weight:700;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cobro-card{background:var(--surface);border-radius:var(--radius);padding:16px;margin-bottom:12px;cursor:pointer;animation:fadeUp .3s ease both}
+.cobro-card:active{transform:scale(.985)}
+.cobro-card h3{font-size:16px;font-weight:700}
+.cobro-card .meta{font-size:12px;color:var(--text2);margin:3px 0 12px}
+.cobro-card .nums{display:flex;justify-content:space-between;font-size:13px;font-weight:600;margin-top:8px}
+.cobro-card .nums .g{color:var(--accent)}
+.cobro-card .nums .r{color:var(--text2)}
+.cobro-card.closed{opacity:.5}
+.progress{height:8px;background:var(--surface2);border-radius:99px;overflow:hidden}
+.progress i{display:block;height:100%;background:var(--accent);border-radius:99px;transition:width .35s}
+.avatar.partial{background:rgba(77,166,255,.15);color:var(--blue)}
+.status-badge.partial{background:rgba(77,166,255,.12);color:var(--blue)}
+
 /* Login */
 .login-screen{position:fixed;inset:0;background:var(--bg);z-index:1000;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px}
 .login-card{background:var(--surface);padding:24px;border-radius:20px;width:100%;max-width:320px;box-shadow:0 10px 30px rgba(0,0,0,0.2);text-align:center}
@@ -227,6 +245,7 @@ body.role-viewer { padding-bottom: calc(20px + var(--safe-bottom)); }
     <h1>Consejo <span>Ciudadano</span></h1>
     <div class="topbar-btns">
       <button class="btn-icon" onclick="syncData()" id="syncBtn">🔄</button>
+      <button class="btn-icon" onclick="openCobros()" title="Cobros y eventos">🍽️</button>
       <button class="btn-icon admin-only" onclick="openConfig()">⚙️</button>
       <button class="btn-icon viewer-only" onclick="openLogin()" title="Acceso Admin">🔒</button>
       <button class="btn-icon admin-only" onclick="logout()" title="Cerrar sesión">🚪</button>
@@ -262,7 +281,40 @@ body.role-viewer { padding-bottom: calc(20px + var(--safe-bottom)); }
   <button class="btn btn-primary" onclick="openAddMember()" style="flex:2">＋ Miembro</button>
 </div>
 
+<div class="cobros-view" id="cobrosView">
+  <div class="cobros-bar">
+    <button class="btn-icon" onclick="closeCobros()">‹</button>
+    <h2 id="cobrosTitle">Cobros</h2>
+    <button class="btn-icon admin-only" id="cobrosAddBtn" onclick="openAddCobro()">＋</button>
+  </div>
+  <div id="cobrosBody"></div>
+</div>
+
 <div class="overlay" id="overlay" onclick="closeAllDrawers()"></div>
+
+<div class="drawer" id="cobroDrawer">
+  <div class="drawer-handle"></div>
+  <h2 id="cobroDrawerTitle">Nuevo Cobro</h2>
+  <div class="field"><label>Nombre</label><input type="text" id="fCobroNombre" placeholder="Ej: Cena Aniversario" autocomplete="off"></div>
+  <div class="field"><label>Valor por persona</label><input type="text" id="fCobroMonto" inputmode="numeric" placeholder="Ej: $ 25.000" oninput="formatCurrencyInput(this)"></div>
+  <div class="field"><label>Fecha del evento (opcional)</label><input type="date" id="fCobroFecha"></div>
+  <div class="actions" id="cobroDrawerActions"></div>
+</div>
+
+<div class="drawer" id="cobroPayDrawer">
+  <div class="drawer-handle"></div>
+  <h2>Registrar Aporte</h2>
+  <div id="cobroPayForName" style="font-size:16px;font-weight:600;margin-bottom:16px;color:var(--accent)"></div>
+  <div class="period-hint" id="cobroPayHint" style="display:none"></div>
+  <div class="field"><label>Monto</label><input type="text" id="fCPayAmount" inputmode="numeric" oninput="formatCurrencyInput(this)"></div>
+  <div class="field"><label>Fecha de pago</label><input type="date" id="fCPayDate"></div>
+  <div class="field"><label>Comprobante (opcional)</label><input type="text" id="fCPayRef" placeholder="Últimos 4 dígitos"></div>
+  <div class="field"><label>Nota (opcional)</label><input type="text" id="fCPayNote" placeholder="Ej: paga la mitad ahora"></div>
+  <div class="actions">
+    <button class="btn btn-secondary" onclick="closeAllDrawers()">Cancelar</button>
+    <button class="btn btn-primary" id="btnSaveCPay" onclick="saveCobroPayment()">✓ Confirmar</button>
+  </div>
+</div>
 
 <div class="drawer" id="memberDrawer">
   <div class="drawer-handle"></div>
@@ -350,13 +402,14 @@ var SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYm
 var sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // ═══════ STATE ═══════
-var members=[],payments=[],expenses=[];
+var members=[],payments=[],expenses=[],cobros=[],cobroPagos=[];
 var todayLocal = new Date();
 var viewMonth=todayLocal.getMonth();
 var viewYear=Math.max(2026, todayLocal.getFullYear());
 if(viewYear===2026 && viewMonth<2){viewMonth=2;} // 2026 arranca en marzo; años posteriores respetan el mes actual
 var activeFilter='all';
 var _editingMemberId=null,_payingMemberId=null;
+var _cobrosOpen=false,_viewCobroId=null,_editingCobroId=null,_cobroPayMemberId=null;
 var currentUserRole = null;
 var _realtimeSub = null;      // canal de Realtime (websocket)
 var _realtimeTimer = null;    // debounce para recargas por Realtime
@@ -519,6 +572,46 @@ async function dbDeleteExpense(id){
   if(r.error) sbThrow(r.error);
 }
 
+// ── COBROS (eventos puntuales) ──
+async function dbAddCobro(p){
+  var id = uid12();
+  var r = await sb.from('cobros').insert({
+    id:id, nombre:p.nombre, monto:Number(p.monto)||0,
+    fecha_evento:p.fechaEvento||null, cerrado:false
+  });
+  if(r.error) sbThrow(r.error);
+  return {id:id};
+}
+async function dbUpdateCobro(p){
+  var r = await sb.from('cobros').update({
+    nombre:p.nombre, monto:Number(p.monto)||0, fecha_evento:p.fechaEvento||null
+  }).eq('id', p.id);
+  if(r.error) sbThrow(r.error);
+}
+async function dbSetCobroCerrado(id, cerrado){
+  var r = await sb.from('cobros').update({ cerrado:!!cerrado }).eq('id', id);
+  if(r.error) sbThrow(r.error);
+}
+async function dbDeleteCobro(id){
+  // Los aportes se borran solos por la FK on delete cascade.
+  var r = await sb.from('cobros').delete().eq('id', id);
+  if(r.error) sbThrow(r.error);
+}
+// Insert (no upsert): un miembro puede tener varios aportes al mismo cobro.
+async function dbAddCobroPago(p){
+  var id = uid12();
+  var r = await sb.from('cobro_pagos').insert({
+    id:id, cobro_id:p.cobroId, member_id:p.memberId,
+    amount:Number(p.amount)||0, date:p.date||null, ref:p.ref||'', note:p.note||''
+  });
+  if(r.error) sbThrow(r.error);
+  return {id:id};
+}
+async function dbDeleteCobroPago(id){
+  var r = await sb.from('cobro_pagos').delete().eq('id', id);
+  if(r.error) sbThrow(r.error);
+}
+
 // ═══════ SYNC ═══════
 function setSyncing(v){
   document.getElementById('syncBar').className=v?'sync-bar syncing':'sync-bar';
@@ -550,18 +643,36 @@ function mapExpenseRow(r){
   };
 }
 
+function mapCobroRow(r){
+  return {
+    id:String(r.id), nombre:String(r.nombre||''), monto:Number(r.monto)||0,
+    fechaEvento:r.fecha_evento?String(r.fecha_evento):'', cerrado:!!r.cerrado
+  };
+}
+function mapCobroPagoRow(r){
+  return {
+    id:String(r.id), cobroId:String(r.cobro_id), memberId:String(r.member_id),
+    amount:Number(r.amount)||0, date:r.date?String(r.date):'',
+    ref:String(r.ref||''), note:String(r.note||'')
+  };
+}
+
 async function syncData(){
   setSyncing(true);
   try{
     var res = await Promise.all([
       sb.from('miembros').select('*'),
       sb.from('pagos').select('*'),
-      sb.from('gastos').select('*')
+      sb.from('gastos').select('*'),
+      sb.from('cobros').select('*'),
+      sb.from('cobro_pagos').select('*')
     ]);
     for(var i=0;i<res.length;i++){ if(res[i].error) throw res[i].error; }
     members  = (res[0].data||[]).map(mapMemberRow);
     payments = (res[1].data||[]).map(mapPaymentRow);
     expenses = (res[2].data||[]).map(mapExpenseRow);
+    cobros     = (res[3].data||[]).map(mapCobroRow);
+    cobroPagos = (res[4].data||[]).map(mapCobroPagoRow);
     saveCache();render();
     ensureRealtime(); // conecta el websocket la primera vez
   }catch(e){
@@ -582,6 +693,8 @@ function ensureRealtime(){
     .on('postgres_changes', { event:'*', schema:'public', table:'miembros' }, onRealtimeChange)
     .on('postgres_changes', { event:'*', schema:'public', table:'pagos' },    onRealtimeChange)
     .on('postgres_changes', { event:'*', schema:'public', table:'gastos' },   onRealtimeChange)
+    .on('postgres_changes', { event:'*', schema:'public', table:'cobros' },      onRealtimeChange)
+    .on('postgres_changes', { event:'*', schema:'public', table:'cobro_pagos' }, onRealtimeChange)
     .subscribe();
 }
 function onRealtimeChange(){
@@ -629,8 +742,8 @@ function loadConfig(){}
 function openConfig(){ openDrawer('configDrawer'); }
 
 // ═══════ CACHE ═══════
-function loadCache(){try{var c=JSON.parse(localStorage.getItem(CACHE_KEY)||'{}');members=c.members||[];payments=c.payments||[];expenses=c.expenses||[]}catch(e){}}
-function saveCache(){localStorage.setItem(CACHE_KEY,JSON.stringify({members:members,payments:payments,expenses:expenses}))}
+function loadCache(){try{var c=JSON.parse(localStorage.getItem(CACHE_KEY)||'{}');members=c.members||[];payments=c.payments||[];expenses=c.expenses||[];cobros=c.cobros||[];cobroPagos=c.cobroPagos||[]}catch(e){}}
+function saveCache(){localStorage.setItem(CACHE_KEY,JSON.stringify({members:members,payments:payments,expenses:expenses,cobros:cobros,cobroPagos:cobroPagos}))}
 
 // ═══════ HELPERS ═══════
 function uid(){return Date.now().toString(36)+Math.random().toString(36).substr(2,5)}
@@ -764,7 +877,17 @@ function render(){
     }
   });
 
-  var totalBalance = saldoAnterior + ingresosDelMes + otrosIngresosDelMes - egresosDelMes;
+  var cobrosDelMes = 0;
+  cobroPagos.forEach(function(p){
+    if(!p.date) return;
+    if(p.date.startsWith(datePrefix)){
+      cobrosDelMes += p.amount;   // aporte a un evento recibido este mes
+    } else if(p.date < datePrefix + '-01'){
+      saldoAnterior += p.amount;
+    }
+  });
+
+  var totalBalance = saldoAnterior + ingresosDelMes + otrosIngresosDelMes + cobrosDelMes - egresosDelMes;
 
   // Armamos la tarjeta superior de FINANZAS (Flujo de caja real)
   var finHTML='<div class="finance-card">';
@@ -772,6 +895,10 @@ function render(){
 
   if(otrosIngresosDelMes>0){
     finHTML+='<div class="finance-row"><span class="label">↩️ Otros ingresos</span><span class="value green mono">+$'+otrosIngresosDelMes.toLocaleString('es-AR')+'</span></div>';
+  }
+
+  if(cobrosDelMes>0){
+    finHTML+='<div class="finance-row"><span class="label">🍽️ Cobros de eventos</span><span class="value green mono">+$'+cobrosDelMes.toLocaleString('es-AR')+'</span></div>';
   }
 
   if(egresosDelMes>0){
@@ -784,6 +911,15 @@ function render(){
   
   finHTML+='<hr class="finance-divider">';
   finHTML+='<div class="finance-row total"><span class="label">Saldo total en cuenta</span><span class="value '+(totalBalance>=0?'blue':'red')+' mono">'+(totalBalance>=0?'$':'-$')+Math.abs(totalBalance).toLocaleString('es-AR')+'</span></div>';
+
+  // Lo juntado para eventos abiertos está en la cuenta pero no es plata del consejo.
+  // Al cerrar el cobro (después de pagar el evento) deja de estar reservado.
+  var reservado = reservadoEventos();
+  if(reservado>0){
+    var disponible = totalBalance - reservado;
+    finHTML+='<div class="finance-row"><span class="label">🔒 Reservado para eventos</span><span class="value yellow mono">-$'+reservado.toLocaleString('es-AR')+'</span></div>';
+    finHTML+='<div class="finance-row total"><span class="label">Disponible del consejo</span><span class="value '+(disponible>=0?'green':'red')+' mono">'+(disponible>=0?'$':'-$')+Math.abs(disponible).toLocaleString('es-AR')+'</span></div>';
+  }
   finHTML+='</div>';
   document.getElementById('financeSection').innerHTML=finHTML;
 
@@ -810,6 +946,8 @@ function render(){
     expHTML+='<div style="font-size:12px;color:var(--text3);padding:4px 0">Sin movimientos este mes</div>';
   }
   document.getElementById('expensesSection').innerHTML=expHTML;
+
+  renderCobros(); // no-op si la vista de cobros está cerrada
   
   renderList();
 }
@@ -1066,6 +1204,285 @@ async function confirmDeleteExpense(id,concept){
     try{await dbDeleteExpense(id);await syncData();hideAction();toast('🗑️ Eliminado')}
     catch(e){hideAction();toast('⚠️ ' + (e.message || 'Error'),true)}
   }});
+}
+
+// ═══════ COBROS (eventos puntuales: cena, rifa, regalo...) ═══════
+// Un cobro NO es un período mensual: la gente puede ir pagando cuando quiera,
+// incluso meses antes del evento. Por eso vive fuera del navegador de meses.
+// Se permiten varios aportes por miembro (pagos en cuotas): lo que debe es
+// simplemente cobro.monto menos la suma de sus aportes.
+
+function cobroPaidBy(cid,mid){
+  var t=0;cobroPagos.forEach(function(p){if(p.cobroId===cid&&p.memberId===mid)t+=p.amount});return t;
+}
+function cobroTotal(cid){
+  var t=0;cobroPagos.forEach(function(p){if(p.cobroId===cid)t+=p.amount});return t;
+}
+// Plata de la caja comprometida con eventos todavía abiertos.
+function reservadoEventos(){
+  var t=0;cobros.forEach(function(c){if(!c.cerrado)t+=cobroTotal(c.id)});return t;
+}
+// Participan los miembros activos hoy (el cobro no está atado a un mes).
+function cobroMembers(){
+  return members.filter(function(m){return !isCurrentlyInactive(m)});
+}
+function cobroStatus(c,mid){
+  var paid=cobroPaidBy(c.id,mid);
+  if(paid<=0) return 'pending';
+  if(c.monto>0 && paid<c.monto) return 'partial';
+  return 'paid';
+}
+function cobroStatusLabel(s){return s==='paid'?'Pagó':s==='partial'?'Parcial':'Falta'}
+
+// ── Navegación ──
+function openCobros(){
+  _cobrosOpen=true;_viewCobroId=null;
+  document.getElementById('cobrosView').classList.add('open');
+  window.scrollTo(0,0);
+  renderCobros();
+}
+function closeCobros(){
+  if(_viewCobroId){_viewCobroId=null;renderCobros();window.scrollTo(0,0);return} // ‹ primero vuelve a la lista
+  _cobrosOpen=false;
+  document.getElementById('cobrosView').classList.remove('open');
+}
+function openCobroDetail(id){_viewCobroId=id;renderCobros();window.scrollTo(0,0)}
+
+// ── Render ──
+function renderCobros(){
+  if(!_cobrosOpen) return;
+  var body=document.getElementById('cobrosBody'),addBtn=document.getElementById('cobrosAddBtn');
+  var c=_viewCobroId?cobros.find(function(x){return x.id===_viewCobroId}):null;
+  if(_viewCobroId&&!c) _viewCobroId=null; // lo borraron desde otro dispositivo
+  if(c){
+    document.getElementById('cobrosTitle').textContent=c.nombre;
+    addBtn.style.display='none';
+    body.innerHTML=cobroDetailHTML(c);
+  }else{
+    document.getElementById('cobrosTitle').textContent='Cobros';
+    addBtn.style.display='';
+    body.innerHTML=cobrosListHTML();
+  }
+}
+
+function cobrosListHTML(){
+  if(!cobros.length) return '<div class="empty"><div class="icon">🍽️</div><p>No hay cobros.<br>Tocá <b>＋</b> para crear uno:<br>una cena, una rifa, un regalo...</p></div>';
+  var activos=cobroMembers();
+  var orden=cobros.slice().sort(function(a,b){
+    if(a.cerrado!==b.cerrado) return a.cerrado?1:-1;                      // cerrados al fondo
+    return (a.fechaEvento||'9999').localeCompare(b.fechaEvento||'9999');  // el más próximo primero
+  });
+  return orden.map(function(c){
+    var rec=cobroTotal(c.id);
+    var pagaron=activos.filter(function(m){return cobroStatus(c,m.id)==='paid'}).length;
+    var objetivo=c.monto>0?c.monto*activos.length:0;
+    var pct=objetivo>0?Math.min(100,Math.round(rec/objetivo*100)):(rec>0?100:0);
+    var meta=(c.fechaEvento?'📅 '+formatDateFull(c.fechaEvento):'Sin fecha')+
+             (c.monto>0?' · $'+c.monto.toLocaleString('es-AR')+' por persona':'')+
+             (c.cerrado?' · 🔒 Cerrado':'');
+    return '<div class="cobro-card'+(c.cerrado?' closed':'')+'" onclick="openCobroDetail(\''+c.id+'\')">'+
+      '<h3>'+c.nombre+'</h3><div class="meta">'+meta+'</div>'+
+      '<div class="progress"><i style="width:'+pct+'%"></i></div>'+
+      '<div class="nums"><span class="g mono">$'+rec.toLocaleString('es-AR')+'</span>'+
+      '<span class="r">'+pagaron+'/'+activos.length+' pagaron</span></div></div>';
+  }).join('');
+}
+
+function cobroDetailHTML(c){
+  var activos=cobroMembers();
+  var rec=cobroTotal(c.id);
+  var objetivo=c.monto>0?c.monto*activos.length:0;
+  var pagaron=activos.filter(function(m){return cobroStatus(c,m.id)==='paid'}).length;
+  var falta=objetivo>0?Math.max(0,objetivo-rec):0;
+
+  var h='<div class="finance-card">';
+  h+='<div class="finance-row"><span class="label">📅 Fecha del evento</span><span class="value mono">'+(c.fechaEvento?formatDateFull(c.fechaEvento):'—')+'</span></div>';
+  if(c.monto>0) h+='<div class="finance-row"><span class="label">🎟️ Valor por persona</span><span class="value mono">$'+c.monto.toLocaleString('es-AR')+'</span></div>';
+  h+='<div class="finance-row"><span class="label">💰 Recaudado</span><span class="value green mono">$'+rec.toLocaleString('es-AR')+'</span></div>';
+  if(objetivo>0){
+    h+='<div class="finance-row"><span class="label">🎯 Objetivo ('+activos.length+' personas)</span><span class="value blue mono">$'+objetivo.toLocaleString('es-AR')+'</span></div>';
+    h+='<hr class="finance-divider">';
+    h+='<div class="finance-row total"><span class="label">Falta juntar</span><span class="value '+(falta>0?'yellow':'green')+' mono">$'+falta.toLocaleString('es-AR')+'</span></div>';
+  }
+  h+='</div>';
+
+  h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px">'+
+     '<div class="stat-card"><div class="val green">'+pagaron+'/'+activos.length+'</div><div class="lbl">Ya pagaron</div></div>'+
+     '<div class="stat-card"><div class="val yellow">'+(activos.length-pagaron)+'</div><div class="lbl">Faltan</div></div></div>';
+
+  h+='<div class="admin-only" style="display:flex;gap:8px;flex-wrap:wrap;margin:14px 0">'+
+     '<button class="btn btn-secondary" style="font-size:13px;padding:10px 16px" onclick="openEditCobro(\''+c.id+'\')">✏️ Editar</button>'+
+     '<button class="btn '+(c.cerrado?'btn-primary':'btn-warn')+'" style="font-size:13px;padding:10px 16px" onclick="toggleCobroCerrado(\''+c.id+'\')">'+(c.cerrado?'♻️ Reabrir':'🔒 Cerrar')+'</button>'+
+     '<button class="btn btn-danger" style="font-size:13px;padding:10px 16px" onclick="confirmDeleteCobro(\''+c.id+'\')">🗑️</button></div>';
+
+  h+='<div class="period-hint" style="display:block;margin-top:0">'+
+     (c.cerrado
+       ? '🔒 Cobro cerrado: lo recaudado ya no figura como reservado en la caja.'
+       : '🔒 Lo recaudado figura como <b>reservado</b> en la caja. Cuando pagues el evento, cargá el gasto y cerrá el cobro.')+
+     '</div>';
+
+  var order={pending:0,partial:1,paid:2};
+  var list=activos.slice().sort(function(a,b){
+    var sa=cobroStatus(c,a.id),sbb=cobroStatus(c,b.id);
+    if(order[sa]!==order[sbb]) return order[sa]-order[sbb];
+    return cmpByApellido(a,b);
+  });
+  if(!list.length) return h+'<div class="empty"><div class="icon">👥</div><p>No hay miembros activos.</p></div>';
+  h+=list.map(function(m,i){
+    var st=cobroStatus(c,m.id),paid=cobroPaidBy(c.id,m.id);
+    var det=paid>0
+      ? 'Aportó $'+paid.toLocaleString('es-AR')+(st==='partial'?' · falta $'+(c.monto-paid).toLocaleString('es-AR'):'')
+      : 'Sin aportes';
+    return '<div class="member-card" style="animation-delay:'+(i*25)+'ms" onclick="openCobroMember(\''+m.id+'\')">'+
+      '<div class="avatar '+st+'">'+initials(m)+'</div>'+
+      '<div class="member-info"><div class="member-name">'+displayName(m)+'</div><div class="member-detail">'+det+'</div></div>'+
+      '<span class="status-badge '+st+'">'+cobroStatusLabel(st)+'</span></div>';
+  }).join('');
+  return h;
+}
+
+// ── Ficha del miembro dentro del cobro (reusa el drawer de detalle) ──
+function openCobroMember(mid){
+  var c=cobros.find(function(x){return x.id===_viewCobroId});if(!c)return;
+  var m=members.find(function(x){return x.id===mid});if(!m)return;
+  var st=cobroStatus(c,mid),paid=cobroPaidBy(c.id,mid);
+  var falta=c.monto>0?Math.max(0,c.monto-paid):0;
+  var hasPhone=cleanPhone(m.phone).length===10;
+  var firstName=m.nombre||(m.name||'').split(' ')[0]||'';
+
+  var msg='Hola '+firstName+' 👋\n\nTe escribo del *Consejo Ciudadano* por *'+c.nombre+'*'+
+    (c.fechaEvento?' ('+formatDateFull(c.fechaEvento)+')':'')+'.\n\n'+
+    (paid>0
+      ? 'Ya aportaste *$'+paid.toLocaleString('es-AR')+'*'+(falta>0?', queda un saldo de *$'+falta.toLocaleString('es-AR')+'*.':'. ¡Ya estás al día!')
+      : 'El valor por persona es *$'+(c.monto||0).toLocaleString('es-AR')+'*.')+
+    '\n\n¡Gracias!';
+  var waBtn=hasPhone?'<a href="'+waLink(m.phone,msg)+'" target="_blank" class="btn btn-wa admin-only" style="text-decoration:none;font-size:13px;padding:10px 16px">📱 Recordar</a>':'';
+  var payBtn=c.cerrado?'':'<button class="btn btn-primary admin-only" style="font-size:13px;padding:10px 16px;flex:1" onclick="openCobroPayment(\''+mid+'\')">💸 Aporte</button>';
+
+  var pagos=cobroPagos.filter(function(p){return p.cobroId===c.id&&p.memberId===mid})
+                      .sort(function(a,b){return (b.date||'').localeCompare(a.date||'')});
+  var hist='<h4 style="font-size:14px;color:var(--text2);margin:20px 0 10px;text-transform:uppercase;letter-spacing:.3px">Aportes</h4>';
+  if(!pagos.length){
+    hist+='<div class="history-item"><div class="history-row"><div class="left" style="color:var(--text3)">Sin aportes<span>Todavía no pagó nada de este cobro</span></div><div class="right" style="color:var(--text3)">—</div></div></div>';
+  }else{
+    pagos.forEach(function(p){
+      var sub=[p.ref?'#'+p.ref:'',p.note].filter(Boolean).join(' · ')||'Aporte';
+      hist+='<div class="history-item"><div class="history-row"><div class="left">'+formatDateFull(p.date)+'<span>'+sub+'</span></div>'+
+            '<div class="right paid">$'+p.amount.toLocaleString('es-AR')+'</div></div>'+
+            '<div class="history-actions"><button class="btn-mini-danger admin-only" onclick="event.stopPropagation();removeCobroPayment(\''+p.id+'\')">✕ Anular</button></div></div>';
+    });
+  }
+
+  document.getElementById('detailContent').innerHTML=
+    '<div class="detail-header"><div class="big-avatar avatar '+st+'">'+initials(m)+'</div><div class="info"><h3>'+displayName(m)+'</h3>'+
+    '<p>'+c.nombre+' · '+(paid>0?'Aportó $'+paid.toLocaleString('es-AR'):'Sin aportes')+(falta>0?' · falta $'+falta.toLocaleString('es-AR'):'')+'</p></div></div>'+
+    '<div style="display:flex;gap:8px;flex-wrap:wrap">'+payBtn+waBtn+'</div>'+hist;
+  openDrawer('detailDrawer');
+}
+
+// ── Alta / edición del cobro ──
+function openAddCobro(){
+  _editingCobroId=null;
+  document.getElementById('cobroDrawerTitle').textContent='Nuevo Cobro';
+  document.getElementById('fCobroNombre').value='';
+  document.getElementById('fCobroMonto').value='';
+  document.getElementById('fCobroFecha').value='';
+  document.getElementById('cobroDrawerActions').innerHTML=
+    '<button class="btn btn-secondary" onclick="closeAllDrawers()">Cancelar</button>'+
+    '<button class="btn btn-primary" onclick="saveCobro()">✓ Crear</button>';
+  openDrawer('cobroDrawer');
+  setTimeout(function(){document.getElementById('fCobroNombre').focus()},350);
+}
+function openEditCobro(id){
+  var c=cobros.find(function(x){return x.id===id});if(!c)return;
+  _editingCobroId=id;
+  document.getElementById('cobroDrawerTitle').textContent='Editar Cobro';
+  document.getElementById('fCobroNombre').value=c.nombre;
+  var el=document.getElementById('fCobroMonto');
+  el.value=c.monto?String(c.monto):'';formatCurrencyInput(el);
+  document.getElementById('fCobroFecha').value=c.fechaEvento||'';
+  document.getElementById('cobroDrawerActions').innerHTML=
+    '<button class="btn btn-secondary" onclick="closeAllDrawers()">Cancelar</button>'+
+    '<button class="btn btn-primary" onclick="saveCobro()">✓ Guardar</button>';
+  openDrawer('cobroDrawer');
+}
+async function saveCobro(){
+  var nombre=document.getElementById('fCobroNombre').value.trim();
+  var monto=parseInt(document.getElementById('fCobroMonto').value.replace(/\D/g,''))||0;
+  var fecha=document.getElementById('fCobroFecha').value;
+  if(!nombre){toast('⚠️ Ingresá el nombre',true);document.getElementById('fCobroNombre').focus();return}
+  var editId=_editingCobroId;
+  closeAllDrawers();showAction(editId?'Actualizando cobro...':'Creando cobro...');
+  try{
+    if(editId){await dbUpdateCobro({id:editId,nombre:nombre,monto:monto,fechaEvento:fecha})}
+    else{var r=await dbAddCobro({nombre:nombre,monto:monto,fechaEvento:fecha});_viewCobroId=r.id}
+    await syncData();
+    hideAction();toast(editId?'✏️ Actualizado':'✅ Cobro creado');
+  }catch(e){hideAction();toast('⚠️ '+(e.message||'Error al guardar'),true)}
+}
+async function toggleCobroCerrado(id){
+  var c=cobros.find(function(x){return x.id===id});if(!c)return;
+  var cerrar=!c.cerrado;
+  showAction(cerrar?'Cerrando cobro...':'Reabriendo cobro...');
+  try{
+    await dbSetCobroCerrado(id,cerrar);await syncData();
+    hideAction();toast(cerrar?'🔒 Cobro cerrado':'♻️ Cobro reabierto');
+  }catch(e){hideAction();toast('⚠️ '+(e.message||'Error'),true)}
+}
+function confirmDeleteCobro(id){
+  var c=cobros.find(function(x){return x.id===id});if(!c)return;
+  var n=cobroPagos.filter(function(p){return p.cobroId===id}).length;
+  openConfirm({title:'¿Eliminar cobro?',msg:'Se eliminará "'+c.nombre+'"'+(n?' y sus '+n+' aporte(s) registrados':'')+'. No se puede deshacer.',
+    btnText:'Eliminar',btnClass:'btn-danger',onConfirm:async function(){
+      closeConfirm();showAction('Eliminando...');
+      try{await dbDeleteCobro(id);_viewCobroId=null;await syncData();hideAction();toast('🗑️ Eliminado')}
+      catch(e){hideAction();toast('⚠️ '+(e.message||'Error'),true)}
+    }});
+}
+
+// ── Aportes ──
+function openCobroPayment(mid){
+  var c=cobros.find(function(x){return x.id===_viewCobroId});if(!c)return;
+  var m=members.find(function(x){return x.id===mid});if(!m)return;
+  _cobroPayMemberId=mid;
+  var paid=cobroPaidBy(c.id,mid);
+  var sugerido=c.monto>0?Math.max(0,c.monto-paid):0; // prellenamos lo que falta para completar
+  document.getElementById('cobroPayForName').textContent=displayName(m)+' · '+c.nombre;
+  var el=document.getElementById('fCPayAmount');
+  el.value=sugerido>0?String(sugerido):'';formatCurrencyInput(el);
+  document.getElementById('fCPayDate').value=localToday();
+  document.getElementById('fCPayRef').value='';
+  document.getElementById('fCPayNote').value='';
+  var hint=document.getElementById('cobroPayHint');
+  if(paid>0){hint.style.display='block';hint.innerHTML='ℹ️ Ya aportó $'+paid.toLocaleString('es-AR')+'. Este monto se suma al anterior.'}
+  else{hint.style.display='none'}
+  document.getElementById('btnSaveCPay').disabled=false;
+  openDrawer('cobroPayDrawer');
+}
+async function saveCobroPayment(){
+  var c=cobros.find(function(x){return x.id===_viewCobroId}),mid=_cobroPayMemberId;
+  if(!c||!mid){toast('⚠️ Error',true);return}
+  var amount=parseInt(document.getElementById('fCPayAmount').value.replace(/\D/g,''))||0;
+  var date=document.getElementById('fCPayDate').value;
+  var ref=document.getElementById('fCPayRef').value.trim();
+  var note=document.getElementById('fCPayNote').value.trim();
+  if(amount<=0){toast('⚠️ Ingresá el monto',true);return}
+  if(!date){toast('⚠️ Seleccioná fecha',true);return}
+  closeAllDrawers();showAction('Registrando aporte...');
+  try{
+    await dbAddCobroPago({cobroId:c.id,memberId:mid,amount:amount,date:date,ref:ref,note:note});
+    await syncData();
+    hideAction();toast('💸 Aporte registrado');
+  }catch(e){hideAction();toast('⚠️ '+(e.message||'Error al guardar'),true)}
+}
+function removeCobroPayment(id){
+  var p=cobroPagos.find(function(x){return x.id===id});if(!p)return;
+  openConfirm({title:'¿Anular aporte?',msg:'$'+p.amount.toLocaleString('es-AR')+' del '+formatDateFull(p.date),
+    btnText:'Anular',btnClass:'btn-danger',onConfirm:async function(){
+      closeConfirm();closeAllDrawers();showAction('Anulando aporte...');
+      try{await dbDeleteCobroPago(id);await syncData();hideAction();toast('↩️ Anulado')}
+      catch(e){hideAction();toast('⚠️ '+(e.message||'Error'),true)}
+    }});
 }
 
 // ═══════ DETAIL ═══════
