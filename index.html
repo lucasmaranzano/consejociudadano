@@ -201,6 +201,8 @@ body{min-height:100dvh;padding-bottom:calc(80px + var(--safe-bottom))}
 .cobro-card .nums .g{color:var(--accent)}
 .cobro-card .nums .r{color:var(--text2)}
 .cobro-card.closed{opacity:.5}
+.cobros-view .search-wrap{padding:6px 0 12px}
+.cobros-view .search-wrap .icon{left:14px}
 .progress{height:8px;background:var(--surface2);border-radius:99px;overflow:hidden}
 .progress i{display:block;height:100%;background:var(--accent);border-radius:99px;transition:width .35s}
 .avatar.partial{background:rgba(77,166,255,.15);color:var(--blue)}
@@ -296,6 +298,10 @@ body.role-viewer { padding-bottom: calc(20px + var(--safe-bottom)); }
     <button class="btn-icon" onclick="closeCobros()">‹</button>
     <h2 id="cobrosTitle">Cobros</h2>
     <button class="btn-icon admin-only" id="cobrosAddBtn" onclick="openAddCobro()">＋</button>
+  </div>
+  <div class="search-wrap" id="cobroSearchWrap" style="display:none">
+    <span class="icon">🔍</span>
+    <input type="text" id="cobroSearch" placeholder="Buscar miembro..." oninput="renderCobros()">
   </div>
   <div id="cobrosBody"></div>
 </div>
@@ -1260,6 +1266,7 @@ function closeCobros(){
 // Abre la vista de cobros directamente en uno (desde la tira de la principal o al crearlo).
 function showCobro(id){
   _cobrosOpen=true;_viewCobroId=id;
+  document.getElementById('cobroSearch').value=''; // entrar a un evento arranca sin filtro
   document.getElementById('cobrosView').classList.add('open');
   window.scrollTo(0,0);renderCobros();
 }
@@ -1298,6 +1305,8 @@ function renderCobros(){
   var body=document.getElementById('cobrosBody'),addBtn=document.getElementById('cobrosAddBtn');
   var c=_viewCobroId?cobros.find(function(x){return x.id===_viewCobroId}):null;
   if(_viewCobroId&&!c) _viewCobroId=null; // lo borraron desde otro dispositivo
+  // El buscador vive fuera de cobrosBody: así no pierde el foco al re-renderizar.
+  document.getElementById('cobroSearchWrap').style.display=c?'':'none';
   if(c){
     document.getElementById('cobrosTitle').textContent=c.nombre;
     addBtn.style.display='none';
@@ -1371,7 +1380,12 @@ function cobroDetailHTML(c){
     if(order[sa]!==order[sbb]) return order[sa]-order[sbb];
     return cmpByApellido(a,b);
   });
-  if(!list.length) return h+'<div class="empty"><div class="icon">👥</div><p>No hay miembros activos.</p></div>';
+  // El buscador sólo filtra la lista: los totales de arriba siguen siendo los del evento entero.
+  var q=(document.getElementById('cobroSearch').value||'').toLowerCase().trim();
+  if(q) list=list.filter(function(m){
+    return ((m.nombre||'')+' '+(m.apellido||'')+' '+(m.name||'')).toLowerCase().includes(q);
+  });
+  if(!list.length) return h+'<div class="empty"><div class="icon">'+(q?'🔍':'👥')+'</div><p>'+(q?'Sin resultados.':'No hay miembros activos.')+'</p></div>';
   h+=list.map(function(m,i){
     var st=cobroStatus(c,m.id),paid=cobroPaidBy(c.id,m.id);
     var det=paid>0
