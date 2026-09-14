@@ -368,6 +368,7 @@ body.role-viewer { padding-bottom: calc(20px + var(--safe-bottom)); }
   <div class="field"><label>Tipo</label><select id="fExpType"><option value="gasto">💸 Gasto</option><option value="reintegro">↩️ Ingreso</option></select></div>
   <div class="field"><label>Concepto</label><select id="fExpConcept"><option value="Alquiler Rolling Code">🏠 Alquiler Rolling Code</option><option value="Servicios">💡 Servicios</option><option value="Limpieza">🧹 Limpieza</option><option value="Otro">📋 Otro</option></select></div>
   <div class="field" id="fExpCustomWrap" style="display:none"><label>Concepto personalizado</label><input type="text" id="fExpCustom" placeholder="Ej: Mantenimiento"></div>
+  <div class="field" id="fExpCobroWrap"><label>¿Es de un evento? (opcional)</label><select id="fExpCobro"></select></div>
   <div class="field"><label>Período</label><div style="display:flex;gap:10px"><select id="fExpMonth"></select><select id="fExpYear"></select></div></div>
   <div class="field"><label>Monto</label><input type="text" id="fExpAmount" inputmode="numeric" placeholder="Ej: $ 50.000" oninput="formatCurrencyInput(this)"></div>
   <div class="field"><label>Fecha de pago</label><input type="date" id="fExpDate"></div>
@@ -395,6 +396,13 @@ body.role-viewer { padding-bottom: calc(20px + var(--safe-bottom)); }
 <div class="drawer" id="configDrawer">
   <div class="drawer-handle"></div><h2>⚙️ Configuración</h2>
   <p class="export-info">Conectado a Supabase en tiempo real. Los cambios se sincronizan solos entre dispositivos.</p>
+
+  <h4 style="font-size:14px;color:var(--text2);margin:18px 0 10px;text-transform:uppercase;letter-spacing:.3px">Cuota mensual</h4>
+  <div id="cuotasBox"></div>
+  <div class="field"><label>Nueva cuota desde</label><div style="display:flex;gap:10px"><select id="fCuotaMonth"></select><select id="fCuotaYear"></select></div></div>
+  <div class="field"><label>Monto</label><input type="text" id="fCuotaMonto" inputmode="numeric" placeholder="Ej: $ 15.000" oninput="formatCurrencyInput(this)"></div>
+  <button class="btn btn-primary" style="width:100%;margin-bottom:6px" onclick="saveCuota()">✓ Guardar cuota</button>
+
   <div class="actions" style="flex-direction:column;gap:10px">
     <button class="btn btn-secondary" onclick="syncData();closeAllDrawers()">🔄 Forzar sincronización</button>
     <button class="btn btn-danger" onclick="logout()">🚪 Cerrar sesión</button>
@@ -407,7 +415,7 @@ body.role-viewer { padding-bottom: calc(20px + var(--safe-bottom)); }
 
 <script>
 // ═══════ CONSTANTS ═══════
-var CACHE_KEY='consejo_cache',AMOUNT=10000;
+var CACHE_KEY='consejo_cache';
 var MONTHS=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 
 // ═══════ SUPABASE ═══════
@@ -418,7 +426,7 @@ var SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYm
 var sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // ═══════ STATE ═══════
-var members=[],payments=[],expenses=[],cobros=[],cobroPagos=[];
+var members=[],payments=[],expenses=[],cobros=[],cobroPagos=[],cuotas=[];
 var todayLocal = new Date();
 var viewMonth=todayLocal.getMonth();
 var viewYear=Math.max(2026, todayLocal.getFullYear());
@@ -563,7 +571,7 @@ async function dbAddPayment(p){
   // upsert por (member_id, month): si ya existía ese mes, lo reemplaza.
   var r = await sb.from('pagos').upsert({
     id:id, member_id:p.memberId, month:p.month, date:p.date||null,
-    amount:Number(p.amount)||AMOUNT, ref:p.ref||'', note:p.note||''
+    amount:Number(p.amount)||0, ref:p.ref||'', note:p.note||''
   }, { onConflict:'member_id,month' });
   if(r.error) sbThrow(r.error);
   return {id:id};
@@ -578,13 +586,24 @@ async function dbAddExpense(p){
   var id = uid12();
   var r = await sb.from('gastos').insert({
     id:id, month:p.month, concept:p.concept||'',
-    amount:Number(p.amount)||0, date:p.date||null, note:p.note||''
+    amount:Number(p.amount)||0, date:p.date||null, note:p.note||'',
+    cobro_id:p.cobroId||null
   });
   if(r.error) sbThrow(r.error);
   return {id:id};
 }
 async function dbDeleteExpense(id){
   var r = await sb.from('gastos').delete().eq('id', id);
+  if(r.error) sbThrow(r.error);
+}
+
+// ── CUOTAS ──
+async function dbSetCuota(desde, monto){
+  var r = await sb.from('cuotas').upsert({ desde:desde, monto:Number(monto)||0 }, { onConflict:'desde' });
+  if(r.error) sbThrow(r.error);
+}
+async function dbDeleteCuota(desde){
+  var r = await sb.from('cuotas').delete().eq('desde', desde);
   if(r.error) sbThrow(r.error);
 }
 
@@ -648,14 +667,15 @@ function mapMemberRow(r){
 function mapPaymentRow(r){
   return {
     id:String(r.id), memberId:String(r.member_id), month:String(r.month||''),
-    date:r.date?String(r.date):'', amount:Number(r.amount)||AMOUNT,
+    date:r.date?String(r.date):'', amount:Number(r.amount)||0,
     ref:String(r.ref||''), note:String(r.note||'')
   };
 }
 function mapExpenseRow(r){
   return {
     id:String(r.id), month:String(r.month||''), concept:String(r.concept||''),
-    amount:Number(r.amount)||0, date:r.date?String(r.date):'', note:String(r.note||'')
+    amount:Number(r.amount)||0, date:r.date?String(r.date):'', note:String(r.note||''),
+    cobroId:r.cobro_id?String(r.cobro_id):''
   };
 }
 
@@ -673,6 +693,10 @@ function mapCobroPagoRow(r){
   };
 }
 
+function mapCuotaRow(r){
+  return { desde:String(r.desde||''), monto:Number(r.monto)||0 };
+}
+
 async function syncData(){
   setSyncing(true);
   try{
@@ -681,7 +705,8 @@ async function syncData(){
       sb.from('pagos').select('*'),
       sb.from('gastos').select('*'),
       sb.from('cobros').select('*'),
-      sb.from('cobro_pagos').select('*')
+      sb.from('cobro_pagos').select('*'),
+      sb.from('cuotas').select('*')
     ]);
     for(var i=0;i<res.length;i++){ if(res[i].error) throw res[i].error; }
     members  = (res[0].data||[]).map(mapMemberRow);
@@ -689,6 +714,7 @@ async function syncData(){
     expenses = (res[2].data||[]).map(mapExpenseRow);
     cobros     = (res[3].data||[]).map(mapCobroRow);
     cobroPagos = (res[4].data||[]).map(mapCobroPagoRow);
+    cuotas     = (res[5].data||[]).map(mapCuotaRow);
     saveCache();render();
     ensureRealtime(); // conecta el websocket la primera vez
   }catch(e){
@@ -704,19 +730,34 @@ async function syncData(){
 // debounce para agrupar cambios en ráfaga). Simple y a prueba de balas para
 // este volumen de datos.
 function ensureRealtime(){
-  if(_realtimeSub) return;
+  // Si el canal sigue vivo no hacemos nada. Si murio (el celular se durmio y
+  // el websocket se cayo), lo tiramos y lo volvemos a crear.
+  if(_realtimeSub && (_realtimeSub.state === 'joined' || _realtimeSub.state === 'joining')) return;
+  if(_realtimeSub){ try{ sb.removeChannel(_realtimeSub); }catch(e){} _realtimeSub=null; }
   _realtimeSub = sb.channel('consejo-cambios')
     .on('postgres_changes', { event:'*', schema:'public', table:'miembros' }, onRealtimeChange)
     .on('postgres_changes', { event:'*', schema:'public', table:'pagos' },    onRealtimeChange)
     .on('postgres_changes', { event:'*', schema:'public', table:'gastos' },   onRealtimeChange)
     .on('postgres_changes', { event:'*', schema:'public', table:'cobros' },      onRealtimeChange)
     .on('postgres_changes', { event:'*', schema:'public', table:'cobro_pagos' }, onRealtimeChange)
+    .on('postgres_changes', { event:'*', schema:'public', table:'cuotas' },      onRealtimeChange)
     .subscribe();
 }
 function onRealtimeChange(){
   clearTimeout(_realtimeTimer);
   _realtimeTimer = setTimeout(function(){ syncData(); }, 400);
 }
+
+// Al bloquear el celular el websocket se cae y, si la app queda abierta de un
+// día para el otro, todayLocal se congela y "vencido" se calcula con la fecha
+// de ayer. Cada vez que la app vuelve al frente refrescamos las dos cosas
+// (syncData reengancha el realtime por su cuenta).
+document.addEventListener('visibilitychange', function(){
+  if(document.visibilityState !== 'visible') return;
+  todayLocal = new Date();
+  syncData();
+});
+window.addEventListener('online', function(){ todayLocal = new Date(); syncData(); });
 
 // ═══════ DRAWERS & TOAST ═══════
 function openDrawer(id){
@@ -755,11 +796,57 @@ function toast(msg,isError){
 // Con Supabase la conexión está fija en el código (URL + anon key), así que
 // el panel de config ya no configura un endpoint. Se mantiene como accesos útiles.
 function loadConfig(){}
-function openConfig(){ openDrawer('configDrawer'); }
+function openConfig(){
+  renderCuotas();
+  buildPeriodSelectors('fCuotaMonth','fCuotaYear', todayLocal.getMonth(), todayLocal.getFullYear());
+  document.getElementById('fCuotaMonto').value='';
+  openDrawer('configDrawer');
+}
+
+// Historial de la cuota. Cada fila rige desde su mes en adelante, así los
+// meses viejos conservan lo que valían cuando se cobraron.
+function renderCuotas(){
+  var orden=cuotas.slice().sort(function(a,b){return b.desde.localeCompare(a.desde)});
+  var h='<p class="export-info">Hoy la cuota es <b style="color:var(--accent)">$'+cuotaHoy().toLocaleString('es-AR')+'</b>. '+
+        'Para cambiarla, cargá el mes desde el que empieza a regir: los meses anteriores no se tocan.</p>';
+  if(!orden.length){
+    h+='<div style="font-size:12px;color:var(--text3);padding:4px 0 10px">Sin cuotas cargadas.</div>';
+  }else{
+    orden.forEach(function(c){
+      var p=c.desde.split('-'),mo=parseInt(p[1],10)-1;
+      h+='<div class="expense-chip"><div class="left">Desde '+MONTHS[mo]+' '+p[0]+'</div>'+
+         '<div class="right mono">$'+c.monto.toLocaleString('es-AR')+
+         '<button class="del" onclick="confirmDeleteCuota(\''+c.desde+'\')">✕</button></div></div>';
+    });
+    h+='<div style="height:10px"></div>';
+  }
+  document.getElementById('cuotasBox').innerHTML=h;
+}
+async function saveCuota(){
+  var mo=parseInt(document.getElementById('fCuotaMonth').value),yr=parseInt(document.getElementById('fCuotaYear').value);
+  var monto=parseInt(document.getElementById('fCuotaMonto').value.replace(/\D/g,''))||0;
+  if(monto<=0){toast('⚠️ Ingresá el monto',true);document.getElementById('fCuotaMonto').focus();return}
+  showAction('Guardando cuota...');
+  try{
+    await dbSetCuota(mkKey(mo,yr),monto);
+    await syncData();
+    hideAction();document.getElementById('fCuotaMonto').value='';renderCuotas();
+    toast('✅ Cuota actualizada');
+  }catch(e){hideAction();toast('⚠️ '+(e.message||'Error al guardar'),true)}
+}
+function confirmDeleteCuota(desde){
+  var p=desde.split('-'),mo=parseInt(p[1],10)-1;
+  openConfirm({title:'¿Eliminar esta cuota?',msg:'La que rige desde '+MONTHS[mo]+' '+p[0]+'. Esos meses pasan a usar el valor anterior.',
+    btnText:'Eliminar',btnClass:'btn-danger',onConfirm:async function(){
+      closeConfirm();showAction('Eliminando...');
+      try{await dbDeleteCuota(desde);await syncData();hideAction();renderCuotas();toast('🗑️ Eliminada')}
+      catch(e){hideAction();toast('⚠️ '+(e.message||'Error'),true)}
+    }});
+}
 
 // ═══════ CACHE ═══════
-function loadCache(){try{var c=JSON.parse(localStorage.getItem(CACHE_KEY)||'{}');members=c.members||[];payments=c.payments||[];expenses=c.expenses||[];cobros=c.cobros||[];cobroPagos=c.cobroPagos||[]}catch(e){}}
-function saveCache(){localStorage.setItem(CACHE_KEY,JSON.stringify({members:members,payments:payments,expenses:expenses,cobros:cobros,cobroPagos:cobroPagos}))}
+function loadCache(){try{var c=JSON.parse(localStorage.getItem(CACHE_KEY)||'{}');members=c.members||[];payments=c.payments||[];expenses=c.expenses||[];cobros=c.cobros||[];cobroPagos=c.cobroPagos||[];cuotas=c.cuotas||[]}catch(e){}}
+function saveCache(){localStorage.setItem(CACHE_KEY,JSON.stringify({members:members,payments:payments,expenses:expenses,cobros:cobros,cobroPagos:cobroPagos,cuotas:cuotas}))}
 
 // ═══════ HELPERS ═══════
 function uid(){return Date.now().toString(36)+Math.random().toString(36).substr(2,5)}
@@ -791,6 +878,19 @@ function formatCurrencyInput(el) {
   el.value = '$ ' + parseInt(val, 10).toLocaleString('es-AR');
 }
 function getDueDay(month, year) { return (year === 2026 && month === 2) ? 25 : 20; }
+
+// Cuota vigente en el mes 'YYYY-MM': la fila con el "desde" mas grande que no lo
+// supere. Un pago de marzo sigue valiendo lo de marzo aunque la cuota suba en julio.
+// Devuelve 0 si todavia no hay ninguna cargada (primer arranque, antes del sync).
+function cuotaDe(mk){
+  var best=null;
+  cuotas.forEach(function(c){
+    if(c.desde<=mk && (!best || c.desde>best.desde)) best=c;
+  });
+  return best?best.monto:0;
+}
+// Cuota de hoy, para los textos que hablan del presente (config, recordatorios).
+function cuotaHoy(){ return cuotaDe(mkKey(todayLocal.getMonth(), todayLocal.getFullYear())); }
 
 function getMemberStatus(mid){
   var mk=curMK();if(getPayment(mid,mk))return'paid';
@@ -956,7 +1056,8 @@ function render(){
       var sign = isIncome ? '+' : '-';
       var color = isIncome ? 'var(--accent)' : 'var(--danger)';
       var icon = isIncome ? '↩️ ' : '';
-      expHTML+='<div class="expense-chip"><div class="left">'+icon+e.concept+'<span>'+formatDateFull(e.date)+(e.note?' · '+e.note:'')+'</span></div><div class="right" style="color:'+color+'">'+sign+'$'+absAmt.toLocaleString('es-AR')+'<button class="del admin-only" onclick="confirmDeleteExpense(\''+e.id+'\',\''+e.concept+'\')">✕</button></div></div>';
+      var evt=e.cobroId?(cobros.find(function(x){return x.id===e.cobroId})||{}).nombre:'';
+      expHTML+='<div class="expense-chip"><div class="left">'+icon+e.concept+'<span>'+formatDateFull(e.date)+(evt?' · 🍽️ '+evt:'')+(e.note?' · '+e.note:'')+'</span></div><div class="right" style="color:'+color+'">'+sign+'$'+absAmt.toLocaleString('es-AR')+'<button class="del admin-only" onclick="confirmDeleteExpense(\''+e.id+'\')">✕</button></div></div>';
     });
   }else{
     expHTML+='<div style="font-size:12px;color:var(--text3);padding:4px 0">Sin movimientos este mes</div>';
@@ -1130,7 +1231,7 @@ function openPayment(id){
       elAmount.parentNode.appendChild(hintEl);
     }
     
-    var fmtA = '$ ' + AMOUNT.toLocaleString('es-AR');       // cuota
+    var fmtA = '$ ' + cuotaDe(mkKey(pm,py)).toLocaleString('es-AR'); // cuota vigente en ese periodo
     hintEl.textContent = '';
     if(elAmount.value === '') elAmount.value = fmtA;
     formatCurrencyInput(elAmount);
@@ -1155,7 +1256,7 @@ async function savePayment(){
   if(memberId.startsWith('temp_')){toast('⚠️ Esperá la sincronización',true);return}
   var payMonth=parseInt(document.getElementById('fPayMonth').value),payYear=parseInt(document.getElementById('fPayYear').value);
   var mk=mkKey(payMonth,payYear),date=document.getElementById('fPayDate').value;
-  var amount=parseInt(document.getElementById('fPayAmount').value.replace(/\D/g, ''))||AMOUNT;
+  var amount=parseInt(document.getElementById('fPayAmount').value.replace(/\D/g, ''))||cuotaDe(mk);
   var ref=document.getElementById('fPayRef').value.trim(),note=document.getElementById('fPayNote').value.trim();
   if(!date){toast('⚠️ Seleccioná fecha',true);return}
   if(getPayment(memberId,mk)){toast('⚠️ Ya pagó '+MONTHS[payMonth],true);return}
@@ -1185,6 +1286,18 @@ function openAddExpense(){
   document.getElementById('fExpCustomWrap').style.display='none';
   document.getElementById('fExpAmount').value='';document.getElementById('fExpDate').value=localToday();document.getElementById('fExpNote').value='';
   buildPeriodSelectors('fExpMonth','fExpYear',viewMonth,viewYear);
+  // Los eventos cerrados no se ofrecen: ya rindieron cuentas.
+  var selC=document.getElementById('fExpCobro');
+  selC.innerHTML='<option value="">— Gasto normal del consejo —</option>';
+  cobros.filter(function(c){return !c.cerrado})
+        .sort(function(a,b){return (a.fechaEvento||'9999').localeCompare(b.fechaEvento||'9999')})
+        .forEach(function(c){
+          var o=document.createElement('option');
+          o.value=c.id;o.textContent='🍽️ '+c.nombre;
+          selC.appendChild(o);
+        });
+  selC.value='';
+  document.getElementById('fExpCobroWrap').style.display=selC.options.length>1?'block':'none';
   document.getElementById('fExpConcept').onchange=function(){document.getElementById('fExpCustomWrap').style.display=this.value==='Otro'?'block':'none'};
   document.getElementById('fExpType').onchange=function(){
     var isIngreso=this.value==='reintegro';
@@ -1208,14 +1321,16 @@ async function saveExpense(){
   closeAllDrawers();
   showAction(isIngreso?'Registrando ingreso...':'Registrando gasto...');
   try{
-    await dbAddExpense({month:mk,concept:concept,amount:amount,date:date,note:note});
+    await dbAddExpense({month:mk,concept:concept,amount:amount,date:date,note:note,cobroId:document.getElementById('fExpCobro').value});
     await syncData();
     hideAction();toast(isIngreso?'↩️ Ingreso registrado':'✅ Gasto registrado');
   }catch(e){hideAction();toast('⚠️ ' + (e.message || 'Error al guardar'),true)}
 }
-async function confirmDeleteExpense(id,concept){
-  var exp=expenses.find(function(x){return x.id===id});
-  var isIncome=exp && exp.amount<0;
+// Recibe sólo el id: el concepto es texto libre y dentro de un onclick un
+// apóstrofo ("Alquiler O'Brien") rompía el HTML y el botón dejaba de andar.
+async function confirmDeleteExpense(id){
+  var exp=expenses.find(function(x){return x.id===id});if(!exp)return;
+  var concept=exp.concept, isIncome=exp.amount<0;
   openConfirm({title:isIncome?'¿Eliminar ingreso?':'¿Eliminar gasto?',msg:'"'+concept+'"',btnText:'Eliminar',btnClass:'btn-danger',onConfirm:async function(){
     closeConfirm();showAction(isIncome?'Eliminando ingreso...':'Eliminando gasto...');
     try{await dbDeleteExpense(id);await syncData();hideAction();toast('🗑️ Eliminado')}
@@ -1235,9 +1350,20 @@ function cobroPaidBy(cid,mid){
 function cobroTotal(cid){
   var t=0;cobroPagos.forEach(function(p){if(p.cobroId===cid)t+=p.amount});return t;
 }
+// Gastos ya imputados a un evento (un ingreso, con monto negativo, resta).
+function gastadoEnCobro(cid){
+  var t=0;expenses.forEach(function(e){if(e.cobroId===cid)t+=e.amount});return t;
+}
 // Plata de la caja comprometida con eventos todavía abiertos.
+// Lo que sobra de cada evento abierto: lo juntado menos lo que ya se pago de el.
+// Si ya gastaste todo, deja de reservar aunque el cobro siga abierto.
 function reservadoEventos(){
-  var t=0;cobros.forEach(function(c){if(!c.cerrado)t+=cobroTotal(c.id)});return t;
+  var t=0;
+  cobros.forEach(function(c){
+    if(c.cerrado) return;
+    t += Math.max(0, cobroTotal(c.id) - gastadoEnCobro(c.id));
+  });
+  return t;
 }
 // Participan los miembros activos hoy (el cobro no está atado a un mes).
 function cobroMembers(){
@@ -1352,6 +1478,12 @@ function cobroDetailHTML(c){
   h+='<div class="finance-row"><span class="label">📅 Fecha del evento</span><span class="value mono">'+(c.fechaEvento?formatDateFull(c.fechaEvento):'—')+'</span></div>';
   if(c.monto>0) h+='<div class="finance-row"><span class="label">🎟️ Valor por persona</span><span class="value mono">$'+c.monto.toLocaleString('es-AR')+'</span></div>';
   h+='<div class="finance-row"><span class="label">💰 Recaudado</span><span class="value green mono">$'+rec.toLocaleString('es-AR')+'</span></div>';
+  var gastado=gastadoEnCobro(c.id);
+  if(gastado!==0){
+    h+='<div class="finance-row"><span class="label">💸 Ya pagado del evento</span><span class="value red mono">-$'+gastado.toLocaleString('es-AR')+'</span></div>';
+    var sobra=rec-gastado;
+    h+='<div class="finance-row"><span class="label">'+(sobra>=0?'🔒 Queda reservado':'⚠️ Puesto de la caja')+'</span><span class="value '+(sobra>=0?'blue':'red')+' mono">$'+Math.abs(sobra).toLocaleString('es-AR')+'</span></div>';
+  }
   if(objetivo>0){
     h+='<div class="finance-row"><span class="label">🎯 Objetivo ('+activos.length+' personas)</span><span class="value blue mono">$'+objetivo.toLocaleString('es-AR')+'</span></div>';
     h+='<hr class="finance-divider">';
@@ -1597,7 +1729,7 @@ function openDetail(id){
   }
   
   var viewDueDay = getDueDay(viewMonth, viewYear);
-  var remAmt = AMOUNT;
+  var remAmt = cuotaDe(curMK());
   var firstName = m.nombre || (m.name||'').split(' ')[0] || '';
   var reminderMsg='Hola '+firstName+' 👋\n\nTe escribo del *Consejo Ciudadano*. La cuota de *'+MONTHS[viewMonth]+' '+viewYear+'* ($'+remAmt.toLocaleString('es-AR')+') está pendiente.\nVencimiento: *'+viewDueDay+'/'+(viewMonth+1)+'/'+viewYear+'*.\n\n¡Gracias!';
   
@@ -1766,7 +1898,8 @@ function exportWhatsApp(){
   if(gastosDelMes.length > 0){
     text+='🏠 *EGRESOS ('+gastosDelMes.length+')*\n';
     gastosDelMes.forEach(function(e){
-      text+='  • '+e.concept+': -$'+e.amount.toLocaleString('es-AR')+' — '+formatDateFull(e.date)+'\n';
+      var ev=e.cobroId?(cobros.find(function(x){return x.id===e.cobroId})||{}).nombre:'';
+      text+='  • '+e.concept+': -$'+e.amount.toLocaleString('es-AR')+' — '+formatDateFull(e.date)+(ev?' — 🍽️ '+ev:'')+'\n';
       totalEgresos += e.amount;
     });
     text+='\n';
@@ -1822,12 +1955,20 @@ function exportPendientes(){
       var icon = s === 'overdue' ? '🔴' : '🟡';
       text += icon+' '+displayName(m)+'\n';
     });
-    text += '\n_💡 Cuota: $'+AMOUNT.toLocaleString('es-AR')+'_';
+    text += '\n_💡 Cuota: $'+cuotaDe(curMK()).toLocaleString('es-AR')+'_';
   }
 
   text += '\n\n📅 _'+localNow()+'_';
 
   copyReport(text);
+}
+
+// Arma una fila CSV. Una comilla dentro de un campo se escribe duplicada
+// (RFC 4180): sin esto una nota como: pagó el "extra"  partía la columna.
+function csvRow(cells){
+  return cells.map(function(v){
+    return '"'+String(v==null?'':v).replace(/"/g,'""')+'"';
+  }).join(',')+'\n';
 }
 
 function exportCSV(){
@@ -1845,13 +1986,13 @@ function exportCSV(){
     var m = members.find(function(x){return x.id === p.memberId});
     var mName = m ? displayName(m) : 'Desconocido';
     var pMonth = MONTHS[parseInt(p.month.split('-')[1]) - 1] + ' ' + p.month.split('-')[0];
-    csv+='"'+mName+'","'+p.amount+'","'+p.date+'","'+pMonth+'","'+(p.ref||'')+'"\n';
+    csv+=csvRow([mName, p.amount, p.date, pMonth, p.ref||'']);
   });
 
   if(otrosIngresosDelMes.length){
     csv+='\nOtros Ingresos\nConcepto,Monto,Fecha,Nota\n';
     otrosIngresosDelMes.forEach(function(e){
-      csv+='"'+e.concept+'","'+Math.abs(e.amount)+'","'+e.date+'","'+(e.note||'')+'"\n';
+      csv+=csvRow([e.concept, Math.abs(e.amount), e.date, e.note||'']);
     });
   }
 
@@ -1861,13 +2002,14 @@ function exportCSV(){
     cobrosDelMes.forEach(function(p){
       var m = members.find(function(x){return x.id === p.memberId});
       var c = cobros.find(function(x){return x.id === p.cobroId});
-      csv+='"'+(c?c.nombre:'')+'","'+(m?displayName(m):'Desconocido')+'","'+p.amount+'","'+p.date+'","'+(p.ref||'')+'","'+(p.note||'')+'"\n';
+      csv+=csvRow([c?c.nombre:'', m?displayName(m):'Desconocido', p.amount, p.date, p.ref||'', p.note||'']);
     });
   }
 
-  csv+='\nEgresos\nConcepto,Monto,Fecha,Nota\n';
+  csv+='\nEgresos\nConcepto,Monto,Fecha,Evento,Nota\n';
   gastosDelMes.forEach(function(e){
-    csv+='"'+e.concept+'","'+e.amount+'","'+e.date+'","'+(e.note||'')+'"\n';
+    var ev=e.cobroId?(cobros.find(function(x){return x.id===e.cobroId})||{}).nombre:'';
+    csv+=csvRow([e.concept, e.amount, e.date, ev||'', e.note||'']);
   });
 
   var blob=new Blob([csv],{type:'text/csv'}),url=URL.createObjectURL(blob),a=document.createElement('a');
