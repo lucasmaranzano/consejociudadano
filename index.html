@@ -1410,6 +1410,17 @@ function showCobro(id){
 }
 function openCobroDetail(id){showCobro(id)}
 
+// Línea de "ya pagado / queda" para las tarjetas. Vacía si todavía no se gastó nada.
+function gastoLine(c, cls){
+  var g=gastadoEnCobro(c.id);
+  if(!g) return '';
+  var sobra=cobroTotal(c.id)-g;
+  return '<div class="'+cls+'" style="margin-top:2px;font-size:11px">'+
+    '<span style="color:var(--danger)">💸 pagado $'+g.toLocaleString('es-AR')+'</span>'+
+    '<span style="color:'+(sobra>=0?'var(--blue)':'var(--danger)')+'">'+
+    (sobra>=0?'queda $':'⚠️ de la caja $')+Math.abs(sobra).toLocaleString('es-AR')+'</span></div>';
+}
+
 // ── Tira de eventos activos en la pantalla principal ──
 function renderCobrosStrip(){
   var abiertos=cobros.filter(function(c){return !c.cerrado});
@@ -1431,7 +1442,8 @@ function renderCobrosStrip(){
          '<div class="progress"><i style="width:'+pct+'%"></i></div>'+
          '<div class="bot"><span class="mono" style="color:var(--accent);font-weight:700">$'+rec.toLocaleString('es-AR')+
          (objetivo>0?'<span style="color:var(--text3);font-weight:400"> de $'+objetivo.toLocaleString('es-AR')+'</span>':'')+'</span>'+
-         '<span style="color:var(--text2)">'+pagaron+'/'+activos.length+' pagaron</span></div></div>';
+         '<span style="color:var(--text2)">'+pagaron+'/'+activos.length+' pagaron</span></div>'+
+         gastoLine(c,'bot')+'</div>';
     });
   }
   document.getElementById('cobrosStrip').innerHTML=h;
@@ -1475,7 +1487,8 @@ function cobrosListHTML(){
       '<h3>'+c.nombre+'</h3><div class="meta">'+meta+'</div>'+
       '<div class="progress"><i style="width:'+pct+'%"></i></div>'+
       '<div class="nums"><span class="g mono">$'+rec.toLocaleString('es-AR')+'</span>'+
-      '<span class="r">'+pagaron+'/'+activos.length+' pagaron</span></div></div>';
+      '<span class="r">'+pagaron+'/'+activos.length+' pagaron</span></div>'+
+      gastoLine(c,'nums')+'</div>';
   }).join('');
 }
 
@@ -1813,6 +1826,12 @@ function exportCobro(){
 
   text+='━━━━━━━━━━━━━━\n';
   text+='💰 Recaudado: $'+rec.toLocaleString('es-AR')+'\n';
+  var gastado=gastadoEnCobro(c.id);
+  if(gastado!==0){
+    var sobra=rec-gastado;
+    text+='💸 Ya pagado del evento: -$'+gastado.toLocaleString('es-AR')+'\n';
+    text+=(sobra>=0?'🔒 Queda reservado: $':'⚠️ Puesto de la caja: $')+Math.abs(sobra).toLocaleString('es-AR')+'\n';
+  }
   if(objetivo>0){
     text+='🎯 Objetivo: $'+objetivo.toLocaleString('es-AR')+'\n';
     text+='⚠️ Falta juntar: $'+Math.max(0,objetivo-rec).toLocaleString('es-AR')+'\n';
@@ -1936,6 +1955,16 @@ function exportWhatsApp(){
     var disponible = saldoCaja - reservado;
     text+='🔒 Reservado para eventos: -$'+reservado.toLocaleString('es-AR')+'\n';
     text+='✅ *Disponible del consejo: '+(disponible>=0?'$':'-$')+Math.abs(disponible).toLocaleString('es-AR')+'*\n';
+
+    // De dónde sale ese reservado, para que no sea un número mágico.
+    text+='\n🍽️ *ESTADO DE EVENTOS*\n';
+    cobros.filter(function(c){return !c.cerrado}).forEach(function(c){
+      var rc=cobroTotal(c.id), gc=gastadoEnCobro(c.id);
+      text+='  • '+c.nombre+(c.fechaEvento?' ('+formatDateFull(c.fechaEvento)+')':'')+'\n';
+      text+='    juntado $'+rc.toLocaleString('es-AR')+
+            (gc?' · pagado $'+gc.toLocaleString('es-AR'):'')+
+            ' · queda $'+Math.max(0,rc-gc).toLocaleString('es-AR')+'\n';
+    });
   }
 
   text+='\n📅 _Generado: '+localNow()+'_';
