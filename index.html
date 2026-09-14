@@ -1364,6 +1364,7 @@ function cobroDetailHTML(c){
      '<div class="stat-card"><div class="val yellow">'+(activos.length-pagaron)+'</div><div class="lbl">Faltan</div></div></div>';
 
   h+='<div class="admin-only" style="display:flex;gap:8px;flex-wrap:wrap;margin:14px 0">'+
+     '<button class="btn btn-primary" style="font-size:13px;padding:10px 16px;flex:1" onclick="exportCobro()">📋 Reporte</button>'+
      '<button class="btn btn-secondary" style="font-size:13px;padding:10px 16px" onclick="openEditCobro(\''+c.id+'\')">✏️ Editar</button>'+
      '<button class="btn '+(c.cerrado?'btn-primary':'btn-warn')+'" style="font-size:13px;padding:10px 16px" onclick="toggleCobroCerrado(\''+c.id+'\')">'+(c.cerrado?'♻️ Reabrir':'🔒 Cerrar')+'</button>'+
      '<button class="btn btn-danger" style="font-size:13px;padding:10px 16px" onclick="confirmDeleteCobro(\''+c.id+'\')">🗑️</button></div>';
@@ -1634,6 +1635,49 @@ function openDetail(id){
 // ═══════ EXPORT ═══════
 function openExport(){openDrawer('exportDrawer')}
 
+// Copia al portapapeles, con fallback para los navegadores que no dan permiso.
+function copyReport(text){
+  navigator.clipboard.writeText(text).then(function(){
+    toast('📋 Copiado');closeAllDrawers();
+  }).catch(function(){
+    var ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);toast('📋 Copiado');closeAllDrawers();
+  });
+}
+
+// Resumen de un evento para pegar en el grupo: quién puso, quién debe y cuánto falta.
+function exportCobro(){
+  var c=cobros.find(function(x){return x.id===_viewCobroId});if(!c)return;
+  var activos=cobroMembers().slice().sort(cmpByApellido);
+  var rec=cobroTotal(c.id);
+  var objetivo=c.monto>0?c.monto*activos.length:0;
+
+  var text='🍽️ *'+c.nombre+'*\n';
+  if(c.fechaEvento) text+='📅 '+formatDateFull(c.fechaEvento)+'\n';
+  if(c.monto>0) text+='🎟️ Valor por persona: $'+c.monto.toLocaleString('es-AR')+'\n';
+  text+='\n';
+
+  var pagaron=[],faltan=[];
+  activos.forEach(function(m){
+    var st=cobroStatus(c,m.id),paid=cobroPaidBy(c.id,m.id);
+    if(st==='paid') pagaron.push('✅ '+displayName(m));
+    else if(st==='partial') faltan.push('🔵 '+displayName(m)+' — puso $'+paid.toLocaleString('es-AR')+', falta $'+(c.monto-paid).toLocaleString('es-AR'));
+    else faltan.push('🔴 '+displayName(m));
+  });
+
+  text+='*Ya pagaron ('+pagaron.length+'/'+activos.length+')*\n'+(pagaron.length?pagaron.join('\n'):'  • Nadie todavía')+'\n\n';
+  if(faltan.length) text+='*Faltan ('+faltan.length+')*\n'+faltan.join('\n')+'\n\n';
+
+  text+='━━━━━━━━━━━━━━\n';
+  text+='💰 Recaudado: $'+rec.toLocaleString('es-AR')+'\n';
+  if(objetivo>0){
+    text+='🎯 Objetivo: $'+objetivo.toLocaleString('es-AR')+'\n';
+    text+='⚠️ Falta juntar: $'+Math.max(0,objetivo-rec).toLocaleString('es-AR')+'\n';
+  }
+  text+='\n📅 _'+localNow()+'_';
+
+  copyReport(text);
+}
+
 function exportWhatsApp(){
   var currentMonthStr = String(viewMonth+1).padStart(2,'0');
   var datePrefix = viewYear + '-' + currentMonthStr; 
@@ -1659,6 +1703,17 @@ function exportWhatsApp(){
       else gastosDelMes.push(e);
     } else if(e.date < datePrefix + '-01'){
       saldoAnterior -= e.amount;
+    }
+  });
+
+  // Mismo criterio que render(): el aporte entra a la caja el día que se recibe.
+  var cobrosDelMes = [];
+  cobroPagos.forEach(function(p){
+    if(!p.date) return;
+    if(p.date.startsWith(datePrefix)){
+      cobrosDelMes.push(p);
+    } else if(p.date < datePrefix + '-01'){
+      saldoAnterior += p.amount;
     }
   });
 
@@ -1695,6 +1750,19 @@ function exportWhatsApp(){
     text+='\n';
   }
 
+  var totalCobros = 0;
+  if(cobrosDelMes.length > 0){
+    text+='🍽️ *COBROS DE EVENTOS ('+cobrosDelMes.length+')*\n';
+    cobrosDelMes.sort(function(a,b){return a.date.localeCompare(b.date)});
+    cobrosDelMes.forEach(function(p){
+      var m = members.find(function(x){return x.id === p.memberId});
+      var c = cobros.find(function(x){return x.id === p.cobroId});
+      text+='  • '+(m?displayName(m):'Desconocido')+': +$'+p.amount.toLocaleString('es-AR')+' — '+formatDateFull(p.date)+' — '+(c?c.nombre:'Evento')+'\n';
+      totalCobros += p.amount;
+    });
+    text+='\n';
+  }
+
   if(gastosDelMes.length > 0){
     text+='🏠 *EGRESOS ('+gastosDelMes.length+')*\n';
     gastosDelMes.forEach(function(e){
@@ -1707,21 +1775,27 @@ function exportWhatsApp(){
   text+='━━━━━━━━━━━━━━\n';
   text+='💰 Cuotas cobradas: $'+totalIngresos.toLocaleString('es-AR')+'\n';
   if(totalOtrosIngresos > 0) text+='↩️ Otros ingresos: +$'+totalOtrosIngresos.toLocaleString('es-AR')+'\n';
+  if(totalCobros > 0) text+='🍽️ Cobros de eventos: +$'+totalCobros.toLocaleString('es-AR')+'\n';
   if(totalEgresos > 0) text+='🏠 Egresos del mes: -$'+totalEgresos.toLocaleString('es-AR')+'\n';
   
   if(saldoAnterior !== 0) {
     text+=(saldoAnterior>=0?'📈':'📉')+' Saldo cuenta anterior: '+(saldoAnterior>=0?'$':'-$')+Math.abs(saldoAnterior).toLocaleString('es-AR')+'\n';
   }
   
-  var saldoCaja = saldoAnterior + totalIngresos + totalOtrosIngresos - totalEgresos;
-  text+='💵 *Saldo Total en Cuenta: '+(saldoCaja>=0?'$':'-$')+Math.abs(saldoCaja).toLocaleString('es-AR')+'*\n\n';
-  text+='📅 _Generado: '+localNow()+'_';
+  var saldoCaja = saldoAnterior + totalIngresos + totalOtrosIngresos + totalCobros - totalEgresos;
+  text+='💵 *Saldo Total en Cuenta: '+(saldoCaja>=0?'$':'-$')+Math.abs(saldoCaja).toLocaleString('es-AR')+'*\n';
 
-  navigator.clipboard.writeText(text).then(function(){
-    toast('📋 Copiado');closeAllDrawers();
-  }).catch(function(){
-    var ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);toast('📋 Copiado');closeAllDrawers();
-  });
+  // Lo juntado para eventos abiertos está en la cuenta pero no es plata del consejo.
+  var reservado = reservadoEventos();
+  if(reservado > 0){
+    var disponible = saldoCaja - reservado;
+    text+='🔒 Reservado para eventos: -$'+reservado.toLocaleString('es-AR')+'\n';
+    text+='✅ *Disponible del consejo: '+(disponible>=0?'$':'-$')+Math.abs(disponible).toLocaleString('es-AR')+'*\n';
+  }
+
+  text+='\n📅 _Generado: '+localNow()+'_';
+
+  copyReport(text);
 }
 
 function exportPendientes(){
@@ -1753,11 +1827,7 @@ function exportPendientes(){
 
   text += '\n\n📅 _'+localNow()+'_';
 
-  navigator.clipboard.writeText(text).then(function(){
-    toast('📋 Copiado');closeAllDrawers();
-  }).catch(function(){
-    var ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);toast('📋 Copiado');closeAllDrawers();
-  });
+  copyReport(text);
 }
 
 function exportCSV(){
@@ -1782,6 +1852,16 @@ function exportCSV(){
     csv+='\nOtros Ingresos\nConcepto,Monto,Fecha,Nota\n';
     otrosIngresosDelMes.forEach(function(e){
       csv+='"'+e.concept+'","'+Math.abs(e.amount)+'","'+e.date+'","'+(e.note||'')+'"\n';
+    });
+  }
+
+  var cobrosDelMes = cobroPagos.filter(function(p){ return p.date && p.date.startsWith(datePrefix); });
+  if(cobrosDelMes.length){
+    csv+='\nCobros de Eventos\nEvento,Nombre,Monto,Fecha,Comprobante,Nota\n';
+    cobrosDelMes.forEach(function(p){
+      var m = members.find(function(x){return x.id === p.memberId});
+      var c = cobros.find(function(x){return x.id === p.cobroId});
+      csv+='"'+(c?c.nombre:'')+'","'+(m?displayName(m):'Desconocido')+'","'+p.amount+'","'+p.date+'","'+(p.ref||'')+'","'+(p.note||'')+'"\n';
     });
   }
 
