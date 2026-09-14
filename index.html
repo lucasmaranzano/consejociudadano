@@ -366,9 +366,8 @@ body.role-viewer { padding-bottom: calc(20px + var(--safe-bottom)); }
   <div class="drawer-handle"></div>
   <h2 id="expenseDrawerTitle">Registrar Gasto</h2>
   <div class="field"><label>Tipo</label><select id="fExpType"><option value="gasto">💸 Gasto</option><option value="reintegro">↩️ Ingreso</option></select></div>
-  <div class="field"><label>Concepto</label><select id="fExpConcept"><option value="Alquiler Rolling Code">🏠 Alquiler Rolling Code</option><option value="Servicios">💡 Servicios</option><option value="Limpieza">🧹 Limpieza</option><option value="Otro">📋 Otro</option></select></div>
+  <div class="field"><label>Concepto</label><select id="fExpConcept"></select></div>
   <div class="field" id="fExpCustomWrap" style="display:none"><label>Concepto personalizado</label><input type="text" id="fExpCustom" placeholder="Ej: Mantenimiento"></div>
-  <div class="field" id="fExpCobroWrap"><label>¿Es de un evento? (opcional)</label><select id="fExpCobro"></select></div>
   <div class="field"><label>Período</label><div style="display:flex;gap:10px"><select id="fExpMonth"></select><select id="fExpYear"></select></div></div>
   <div class="field"><label>Monto</label><input type="text" id="fExpAmount" inputmode="numeric" placeholder="Ej: $ 50.000" oninput="formatCurrencyInput(this)"></div>
   <div class="field"><label>Fecha de pago</label><input type="date" id="fExpDate"></div>
@@ -1282,22 +1281,26 @@ function openAddExpense(){
   document.getElementById('fExpType').value='gasto';
   document.getElementById('expenseDrawerTitle').textContent='Registrar Gasto';
   document.getElementById('btnSaveExp').textContent='✓ Registrar';
-  document.getElementById('fExpConcept').value='Alquiler Rolling Code';
-  document.getElementById('fExpCustomWrap').style.display='none';
-  document.getElementById('fExpAmount').value='';document.getElementById('fExpDate').value=localToday();document.getElementById('fExpNote').value='';
-  buildPeriodSelectors('fExpMonth','fExpYear',viewMonth,viewYear);
-  // Los eventos cerrados no se ofrecen: ya rindieron cuentas.
-  var selC=document.getElementById('fExpCobro');
-  selC.innerHTML='<option value="">— Gasto normal del consejo —</option>';
+  // Los eventos abiertos son conceptos más: pagar la cena ES el concepto "Cena".
+  // Elegir uno guarda el nombre como concepto y el vínculo al cobro de una sola vez.
+  var selCon=document.getElementById('fExpConcept');
+  selCon.innerHTML='<option value="Alquiler Rolling Code">🏠 Alquiler Rolling Code</option>'+
+                   '<option value="Servicios">💡 Servicios</option>'+
+                   '<option value="Limpieza">🧹 Limpieza</option>';
   cobros.filter(function(c){return !c.cerrado})
         .sort(function(a,b){return (a.fechaEvento||'9999').localeCompare(b.fechaEvento||'9999')})
         .forEach(function(c){
           var o=document.createElement('option');
-          o.value=c.id;o.textContent='🍽️ '+c.nombre;
-          selC.appendChild(o);
+          o.value='cobro:'+c.id; o.textContent='🍽️ '+c.nombre;
+          selCon.appendChild(o);
         });
-  selC.value='';
-  document.getElementById('fExpCobroWrap').style.display=selC.options.length>1?'block':'none';
+  var oOtro=document.createElement('option');
+  oOtro.value='Otro'; oOtro.textContent='📋 Otro';
+  selCon.appendChild(oOtro);
+  selCon.value='Alquiler Rolling Code';
+  document.getElementById('fExpCustomWrap').style.display='none';
+  document.getElementById('fExpAmount').value='';document.getElementById('fExpDate').value=localToday();document.getElementById('fExpNote').value='';
+  buildPeriodSelectors('fExpMonth','fExpYear',viewMonth,viewYear);
   document.getElementById('fExpConcept').onchange=function(){document.getElementById('fExpCustomWrap').style.display=this.value==='Otro'?'block':'none'};
   document.getElementById('fExpType').onchange=function(){
     var isIngreso=this.value==='reintegro';
@@ -1310,8 +1313,17 @@ function openAddExpense(){
 async function saveExpense(){
   var type=document.getElementById('fExpType').value;
   var isIngreso=type==='reintegro';
-  var concept=document.getElementById('fExpConcept').value;
-  if(concept==='Otro'){concept=document.getElementById('fExpCustom').value.trim();if(!concept){toast('⚠️ Ingresá concepto',true);return}}
+  // Un concepto "cobro:<id>" es un evento: el nombre va como concepto y además
+  // queda el vínculo, que es lo que descuenta del reservado en la caja.
+  var sel=document.getElementById('fExpConcept').value, concept=sel, cobroId='';
+  if(sel.indexOf('cobro:')===0){
+    cobroId=sel.slice(6);
+    var cSel=cobros.find(function(x){return x.id===cobroId});
+    concept=cSel?cSel.nombre:'Evento';
+  }else if(sel==='Otro'){
+    concept=document.getElementById('fExpCustom').value.trim();
+    if(!concept){toast('⚠️ Ingresá concepto',true);return}
+  }
   var expMonth=parseInt(document.getElementById('fExpMonth').value),expYear=parseInt(document.getElementById('fExpYear').value);
   var mk=mkKey(expMonth,expYear),amount=parseInt(document.getElementById('fExpAmount').value.replace(/\D/g, ''));
   var date=document.getElementById('fExpDate').value,note=document.getElementById('fExpNote').value.trim();
@@ -1321,7 +1333,7 @@ async function saveExpense(){
   closeAllDrawers();
   showAction(isIngreso?'Registrando ingreso...':'Registrando gasto...');
   try{
-    await dbAddExpense({month:mk,concept:concept,amount:amount,date:date,note:note,cobroId:document.getElementById('fExpCobro').value});
+    await dbAddExpense({month:mk,concept:concept,amount:amount,date:date,note:note,cobroId:cobroId});
     await syncData();
     hideAction();toast(isIngreso?'↩️ Ingreso registrado':'✅ Gasto registrado');
   }catch(e){hideAction();toast('⚠️ ' + (e.message || 'Error al guardar'),true)}
