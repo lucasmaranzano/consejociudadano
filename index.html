@@ -391,7 +391,7 @@ body.role-viewer { padding-bottom: calc(20px + var(--safe-bottom)); }
   </div>
 
   <h4 style="font-size:14px;color:var(--text2);margin:22px 0 8px;text-transform:uppercase;letter-spacing:.3px">Auditoría</h4>
-  <p class="export-info">Rendición completa desde el primer movimiento hasta hoy: todas las entradas y salidas con fecha, el saldo mes a mes, el detalle de cada evento, lo aportado por cada miembro y lo que se adeuda.</p>
+  <p class="export-info">Rendición completa desde el primer movimiento hasta hoy: todas las entradas y salidas con fecha, el saldo mes a mes y el detalle de cada evento.</p>
   <div class="actions" style="flex-direction:column;gap:10px">
     <button class="btn btn-primary" onclick="exportRendicionPDF()">📚 Rendición Total PDF</button>
     <button class="btn btn-secondary" onclick="exportRendicionCSV()">🧾 Rendición Total CSV</button>
@@ -2311,12 +2311,6 @@ function mesLabel(mk){
   var p = String(mk).split('-');
   return (MONTHS[parseInt(p[1],10)-1]||'') + ' ' + p[0];
 }
-// 'YYYY-MM' → 'mar-26' (para listas largas de meses adeudados)
-function mesCorto(mk){
-  if(!mk) return '';
-  var p = String(mk).split('-');
-  return (MONTHS[parseInt(p[1],10)-1]||'').toLowerCase().substr(0,3) + '-' + p[0].substr(2);
-}
 // El miembro puede haber sido borrado: la rendición igual tiene que mostrar el movimiento.
 function nombreMiembro(id){
   var m = members.find(function(x){ return x.id===id; });
@@ -2325,31 +2319,6 @@ function nombreMiembro(id){
 function nombreCobro(id){
   var c = cobros.find(function(x){ return x.id===id; });
   return c ? c.nombre : 'Evento eliminado';
-}
-
-// Primer mes con actividad de cualquier tipo: el arranque de la rendición.
-function primerMesConDatos(){
-  var min = null;
-  function ver(mk){ if(mk && (!min || mk < min)) min = mk; }
-  payments.forEach(function(p){ ver(p.month); ver(p.date ? p.date.substr(0,7) : ''); });
-  expenses.forEach(function(e){ ver(e.month); ver(e.date ? e.date.substr(0,7) : ''); });
-  cobroPagos.forEach(function(p){ ver(p.date ? p.date.substr(0,7) : ''); });
-  cobros.forEach(function(c){ ver(c.fechaEvento ? c.fechaEvento.substr(0,7) : ''); });
-  cuotas.forEach(function(c){ ver(c.desde); });
-  return min || mkKey(todayLocal.getMonth(), todayLocal.getFullYear());
-}
-
-// Lista de meses 'YYYY-MM' entre dos extremos, inclusive.
-function mesesEntre(desde, hasta){
-  var out=[], p=String(desde).split('-');
-  var y=parseInt(p[0],10), m=parseInt(p[1],10)-1, guard=0;
-  while(guard++ < 600){
-    var mk = mkKey(m,y);
-    out.push(mk);
-    if(mk >= hasta) break;
-    m++; if(m>11){ m=0; y++; }
-  }
-  return out;
 }
 
 // LIBRO DIARIO: un renglón por movimiento real de caja, en orden cronológico,
@@ -2361,7 +2330,7 @@ function construirLibro(){
 
   payments.forEach(function(p){
     var mv = {
-      date: p.date||'', tipo:'Cuota', detalle:'Cuota social',
+      date: p.date||'', tipo:'Cuota', detalle:'Cuota mensual',
       persona: nombreMiembro(p.memberId),
       imputacion: p.month ? ('Cuota de ' + mesLabel(p.month)) : '',
       comprobante: p.ref||'', nota: p.note||'',
@@ -2469,64 +2438,6 @@ function detalleEventos(){
   });
 }
 
-// Lo que puso cada miembro desde el arranque (cuotas + eventos).
-function aportesPorMiembro(){
-  return members.slice().sort(cmpByApellido).map(function(m){
-    var cuotasPagas = 0, totalCuotas = 0, totalEventos = 0;
-    payments.forEach(function(p){ if(p.memberId===m.id){ cuotasPagas++; totalCuotas += p.amount; } });
-    cobroPagos.forEach(function(p){ if(p.memberId===m.id) totalEventos += p.amount; });
-    var baja = currentBajaDate(m);
-    return {
-      m:m, estado: baja ? ('Baja ' + formatDateFull(baja)) : 'Activo',
-      cuotasPagas:cuotasPagas, totalCuotas:totalCuotas, totalEventos:totalEventos,
-      total: totalCuotas + totalEventos
-    };
-  });
-}
-
-// ¿Se le puede reclamar la cuota de ese mes? No si estaba de baja, ni antes de
-// su alta cuando el historial arranca con una. El que nunca tuvo movimientos de
-// alta/baja se considera miembro desde el primer mes de la rendición.
-function exigibleCuota(m, mk){
-  var p = String(mk).split('-');
-  if(isInactive(m, parseInt(p[1],10)-1, parseInt(p[0],10))) return false;
-  var h = getHistory(m);
-  if(h.length && h[0].t === 'alta' && mk < String(h[0].d).substr(0,7)) return false;
-  return true;
-}
-
-// Cuotas sin pagar desde el arranque hasta el mes en curso, valuadas con la
-// cuota que regía en cada mes.
-function deudaCuotas(){
-  var hasta = mkKey(todayLocal.getMonth(), todayLocal.getFullYear());
-  var meses = mesesEntre(primerMesConDatos(), hasta);
-  var filas = [];
-  members.forEach(function(m){
-    var faltan = [], monto = 0;
-    meses.forEach(function(mk){
-      if(!exigibleCuota(m, mk)) return;
-      if(getPayment(m.id, mk)) return;
-      faltan.push(mk);
-      monto += cuotaDe(mk);
-    });
-    if(faltan.length) filas.push({ m:m, meses:faltan, monto:monto });
-  });
-  filas.sort(function(a,b){ return b.monto - a.monto; });
-  return { filas:filas, meses:meses };
-}
-
-// Altas y bajas cargadas, en orden cronológico.
-function movimientosDePadron(){
-  var out = [];
-  members.forEach(function(m){
-    getHistory(m).forEach(function(ev){
-      out.push({ nombre: displayName(m), tipo: ev.t==='baja' ? 'Baja' : 'Alta', fecha: ev.d||'' });
-    });
-  });
-  out.sort(function(a,b){ return String(a.fecha).localeCompare(String(b.fecha)); });
-  return out;
-}
-
 // ── PDF ──
 function exportRendicionPDF(){
   if(!window.jspdf){
@@ -2608,7 +2519,7 @@ function armarRendicionPDF(libro){
   seccion('1. RESUMEN GENERAL', null, {
     head: [['Concepto','Movimientos','Importe']],
     body: [
-      ['Ingresos por cuotas sociales',            t.nCuotas,  money(t.cuotas)],
+      ['Ingresos por cuotas mensuales',           t.nCuotas,  money(t.cuotas)],
       ['Ingresos por eventos (cenas, rifas...)',  t.nEventos, money(t.eventos)],
       ['Otros ingresos',                          t.nOtros,   money(t.otros)],
       ['TOTAL INGRESOS',        t.nCuotas+t.nEventos+t.nOtros, money(t.ingresos)],
@@ -2706,63 +2617,14 @@ function armarRendicionPDF(libro){
     });
   }
 
-  // ── 5. Aportes por miembro ──
-  var aportes = aportesPorMiembro();
-  if(aportes.length){
-    var cT=0, eT=0, tT=0;
-    aportes.forEach(function(a){ cT+=a.totalCuotas; eT+=a.totalEventos; tT+=a.total; });
-    seccion('5. APORTES POR MIEMBRO (historico completo)', null, {
-      head: [['N','Miembro','Telefono','Estado','Cuotas pagadas','Total en cuotas','Total en eventos','Total aportado']],
-      body: aportes.map(function(a, i){
-        return [ i+1, displayName(a.m), a.m.phone ? formatPhoneDisplay(a.m.phone) : '', a.estado,
-                 a.cuotasPagas, money(a.totalCuotas), money(a.totalEventos), money(a.total) ];
-      }),
-      foot: [[ '', 'TOTALES', '', '', '', money(cT), money(eT), money(tT) ]],
-      columnStyles: { 0:{cellWidth:10,halign:'center'}, 1:{cellWidth:ANCHO-178,halign:'left'},
-                      2:{cellWidth:30,halign:'center'}, 3:{cellWidth:30,halign:'center'},
-                      4:{cellWidth:24,halign:'center'}, 5:{cellWidth:28,halign:'right'},
-                      6:{cellWidth:28,halign:'right'}, 7:{cellWidth:28,halign:'right'} }
-    });
-  }
-
-  // ── 6. Cuotas adeudadas ──
-  var deuda = deudaCuotas();
-  if(deuda.filas.length){
-    var deudaT = 0;
-    deuda.filas.forEach(function(f){ deudaT += f.monto; });
-    seccion('6. CUOTAS ADEUDADAS AL ' + formatDateFull(hoy),
-            'Meses sin pago entre ' + mesLabel(deuda.meses[0]) + ' y ' + mesLabel(deuda.meses[deuda.meses.length-1]) +
-            ', valuados con la cuota vigente de cada mes. Incluye el mes en curso y excluye los meses de baja. ' +
-            'Al miembro que se sumo despues hay que cargarle el alta para que no arrastre los meses anteriores.', {
-      head: [['Miembro','Meses adeudados','Importe estimado','Detalle de meses']],
-      body: deuda.filas.map(function(f){
-        return [ displayName(f.m), f.meses.length, money(f.monto), f.meses.map(mesCorto).join(', ') ];
-      }),
-      foot: [[ 'TOTAL ADEUDADO', '', money(deudaT), '' ]],
-      columnStyles: { 0:{cellWidth:60,halign:'left'}, 1:{cellWidth:28,halign:'center'},
-                      2:{cellWidth:32,halign:'right'}, 3:{cellWidth:ANCHO-120} }
-    });
-  }
-
-  // ── 7. Historial de la cuota ──
+  // ── 5. Historial de la cuota ──
   if(cuotas.length){
-    seccion('7. VALOR DE LA CUOTA SOCIAL', 'Cada valor rige desde ese mes en adelante.', {
+    seccion('5. VALOR DE LA CUOTA MENSUAL', 'Cada valor rige desde ese mes en adelante.', {
       head: [['Rige desde','Monto']],
       body: cuotas.slice().sort(function(a,b){ return a.desde.localeCompare(b.desde); })
                   .map(function(c){ return [ mesLabel(c.desde), money(c.monto) ]; }),
       tableWidth: 'wrap',
       columnStyles: { 0:{cellWidth:60}, 1:{cellWidth:40,halign:'right'} }
-    });
-  }
-
-  // ── 8. Altas y bajas ──
-  var padron = movimientosDePadron();
-  if(padron.length){
-    seccion('8. ALTAS Y BAJAS DE MIEMBROS', null, {
-      head: [['Fecha','Miembro','Movimiento']],
-      body: padron.map(function(p){ return [ p.fecha ? formatDateFull(p.fecha) : '-', p.nombre, p.tipo ]; }),
-      tableWidth: 'wrap',
-      columnStyles: { 0:{cellWidth:26,halign:'center'}, 1:{cellWidth:80,halign:'left'}, 2:{cellWidth:30,halign:'center'} }
     });
   }
 
@@ -2812,7 +2674,7 @@ function exportRendicionCSV(){
 
   csv += '\n' + csvRow(['RESUMEN GENERAL']);
   csv += csvRow(['Concepto','Movimientos','Importe']);
-  csv += csvRow(['Ingresos por cuotas sociales', t.nCuotas, t.cuotas]);
+  csv += csvRow(['Ingresos por cuotas mensuales', t.nCuotas, t.cuotas]);
   csv += csvRow(['Ingresos por eventos', t.nEventos, t.eventos]);
   csv += csvRow(['Otros ingresos', t.nOtros, t.otros]);
   csv += csvRow(['TOTAL INGRESOS', t.nCuotas+t.nEventos+t.nOtros, t.ingresos]);
@@ -2856,38 +2718,12 @@ function exportRendicionCSV(){
     });
   }
 
-  var aportes = aportesPorMiembro();
-  if(aportes.length){
-    csv += '\n' + csvRow(['APORTES POR MIEMBRO']);
-    csv += csvRow(['Miembro','Telefono','Estado','CuotasPagadas','TotalEnCuotas','TotalEnEventos','TotalAportado']);
-    aportes.forEach(function(a){
-      csv += csvRow([displayName(a.m), a.m.phone||'', a.estado, a.cuotasPagas,
-                     a.totalCuotas, a.totalEventos, a.total]);
-    });
-  }
-
-  var deuda = deudaCuotas();
-  if(deuda.filas.length){
-    csv += '\n' + csvRow(['CUOTAS ADEUDADAS AL '+formatDateFull(hoy)]);
-    csv += csvRow(['Miembro','MesesAdeudados','ImporteEstimado','DetalleDeMeses']);
-    deuda.filas.forEach(function(f){
-      csv += csvRow([displayName(f.m), f.meses.length, f.monto, f.meses.join(' ')]);
-    });
-  }
-
   if(cuotas.length){
-    csv += '\n' + csvRow(['VALOR DE LA CUOTA SOCIAL']);
+    csv += '\n' + csvRow(['VALOR DE LA CUOTA MENSUAL']);
     csv += csvRow(['RigeDesde','Monto']);
     cuotas.slice().sort(function(a,b){ return a.desde.localeCompare(b.desde); }).forEach(function(c){
       csv += csvRow([c.desde, c.monto]);
     });
-  }
-
-  var padron = movimientosDePadron();
-  if(padron.length){
-    csv += '\n' + csvRow(['ALTAS Y BAJAS DE MIEMBROS']);
-    csv += csvRow(['Fecha','Miembro','Movimiento']);
-    padron.forEach(function(p){ csv += csvRow([p.fecha, p.nombre, p.tipo]); });
   }
 
   // El BOM es lo que hace que Excel muestre bien los acentos.
