@@ -388,6 +388,13 @@ body.role-viewer { padding-bottom: calc(20px + var(--safe-bottom)); }
     <button class="btn btn-primary" style="background:var(--warn);color:var(--bg)" onclick="exportPendientes()">⚠️ Quiénes faltan pagar</button>
     <button class="btn btn-primary" style="background:var(--blue);color:var(--bg)" onclick="exportMembershipPDF()">📄 Planilla Anual PDF</button>
     <button class="btn btn-secondary" onclick="exportCSV()">📑 Descargar CSV</button>
+  </div>
+
+  <h4 style="font-size:14px;color:var(--text2);margin:22px 0 8px;text-transform:uppercase;letter-spacing:.3px">Auditoría</h4>
+  <p class="export-info">Rendición completa desde el primer movimiento hasta hoy: todas las entradas y salidas con fecha, el saldo mes a mes, el detalle de cada evento, lo aportado por cada miembro y lo que se adeuda.</p>
+  <div class="actions" style="flex-direction:column;gap:10px">
+    <button class="btn btn-primary" onclick="exportRendicionPDF()">📚 Rendición Total PDF</button>
+    <button class="btn btn-secondary" onclick="exportRendicionCSV()">🧾 Rendición Total CSV</button>
     <button class="btn btn-secondary" onclick="closeAllDrawers()">Cerrar</button>
   </div>
 </div>
@@ -2215,32 +2222,33 @@ function exportMembershipPDF(){
     doc.text('Miembros activos: ' + activosCount + '   |   En planilla: ' + relevantMembers.length + '   |   Cuotas pagadas en ' + year + ': ' + pagosAnio, 14, finalY + 8);
   }
 
-  // ── Descarga / compartir compatible con todos los dispositivos ──
+  // ── Nombre del archivo y entrega (compartir en el celular, descargar en la compu) ──
   var _hoy = new Date();
   var _dd = String(_hoy.getDate()).padStart(2,'0');
   var _mm = String(_hoy.getMonth()+1).padStart(2,'0');
   var filename = 'Pago_Membresia_' + year + '_' + _dd + '-' + _mm + '.pdf';
-  var pdfBlob = doc.output('blob');
+  entregarArchivo(doc.output('blob'), filename, 'Planilla Anual ' + year,
+                  'Consejo Ciudadano - Planilla de membresias ' + year);
+}
 
+// ═══════ ENTREGA DE ARCHIVOS ═══════
+// Una sola puerta de salida para todo lo que descarga la app: en el celular
+// abre el panel nativo (WhatsApp, Mail, Archivos) y en la compu baja el archivo.
+// iOS viejo sin Web Share API no puede descargar: se abre en una pestaña.
+function entregarArchivo(blob, filename, shareTitle, shareText){
   var isIOS     = /ipad|iphone|ipod/i.test(navigator.userAgent) && !window.MSStream;
   var isAndroid = /android/i.test(navigator.userAgent);
   var isMobile  = isIOS || isAndroid;
+  var mime      = blob.type || 'application/octet-stream';
 
   // 1️⃣ MÓVIL + Web Share API con archivos → panel nativo iOS/Android
-  //    (WhatsApp, Mail, AirDrop, Guardar en Archivos…)
   if (isMobile && navigator.canShare) {
-    var pdfFile = new File([pdfBlob], filename, { type: 'application/pdf' });
-    if (navigator.canShare({ files: [pdfFile] })) {
-      navigator.share({
-        files: [pdfFile],
-        title: 'Planilla Anual ' + year,
-        text: 'Consejo Ciudadano — Planilla de membresías ' + year
-      }).then(function() {
-        toast('✅ PDF compartido');
-      }).catch(function(err) {
-        if (err.name !== 'AbortError') {
-          toast('⚠️ No se pudo compartir', true);
-        }
+    var f = new File([blob], filename, { type: mime });
+    if (navigator.canShare({ files: [f] })) {
+      navigator.share({ files:[f], title:shareTitle, text:shareText }).then(function(){
+        toast('✅ Archivo compartido');
+      }).catch(function(err){
+        if (err.name !== 'AbortError') toast('⚠️ No se pudo compartir', true);
       });
       closeAllDrawers();
       return;
@@ -2248,22 +2256,20 @@ function exportMembershipPDF(){
   }
 
   // 2️⃣ DESKTOP o Android sin Share API → descarga directa por blob
-  //    Windows, Mac, Linux, Chrome/Firefox/Edge: siempre descarga el archivo
   if (!isIOS) {
-    var url = URL.createObjectURL(pdfBlob);
+    var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url;
     a.download = filename;
     document.body.appendChild(a);
     a.click();
     setTimeout(function(){ URL.revokeObjectURL(url); document.body.removeChild(a); }, 2000);
-    toast('📄 PDF descargado');
+    toast('📥 Descargado');
     closeAllDrawers();
     return;
   }
 
-  // 3️⃣ iOS antiguo sin Web Share API → abrir data URI en nueva pestaña
-  //    Desde ahí tocar ⬆ Compartir → WhatsApp / Guardar en Archivos
+  // 3️⃣ iOS antiguo sin Web Share API → abrir en nueva pestaña y usar ⬆ Compartir
   var reader = new FileReader();
   reader.onload = function() {
     var win = window.open('', '_blank');
@@ -2285,8 +2291,610 @@ function exportMembershipPDF(){
       toast('⚠️ Permitir ventanas emergentes para descargar', true);
     }
   };
-  reader.readAsDataURL(pdfBlob);
+  reader.readAsDataURL(blob);
   closeAllDrawers();
+}
+
+// ═══════ RENDICIÓN TOTAL (auditoría) ═══════
+// Todo lo que entró y salió desde el primer movimiento registrado hasta el día
+// de la descarga. No mira el mes que está abierto en pantalla: barre las tablas
+// enteras (cuotas, eventos, otros ingresos y egresos) y arma el libro completo.
+
+// Plata en texto plano: las fuentes del PDF no tienen emojis ni símbolos raros.
+function money(n){
+  var v = Math.round(Number(n)||0);
+  return (v<0?'-$ ':'$ ') + Math.abs(v).toLocaleString('es-AR');
+}
+// 'YYYY-MM' → 'Marzo 2026'
+function mesLabel(mk){
+  if(!mk) return '';
+  var p = String(mk).split('-');
+  return (MONTHS[parseInt(p[1],10)-1]||'') + ' ' + p[0];
+}
+// 'YYYY-MM' → 'mar-26' (para listas largas de meses adeudados)
+function mesCorto(mk){
+  if(!mk) return '';
+  var p = String(mk).split('-');
+  return (MONTHS[parseInt(p[1],10)-1]||'').toLowerCase().substr(0,3) + '-' + p[0].substr(2);
+}
+// El miembro puede haber sido borrado: la rendición igual tiene que mostrar el movimiento.
+function nombreMiembro(id){
+  var m = members.find(function(x){ return x.id===id; });
+  return m ? displayName(m) : 'Miembro eliminado';
+}
+function nombreCobro(id){
+  var c = cobros.find(function(x){ return x.id===id; });
+  return c ? c.nombre : 'Evento eliminado';
+}
+
+// Primer mes con actividad de cualquier tipo: el arranque de la rendición.
+function primerMesConDatos(){
+  var min = null;
+  function ver(mk){ if(mk && (!min || mk < min)) min = mk; }
+  payments.forEach(function(p){ ver(p.month); ver(p.date ? p.date.substr(0,7) : ''); });
+  expenses.forEach(function(e){ ver(e.month); ver(e.date ? e.date.substr(0,7) : ''); });
+  cobroPagos.forEach(function(p){ ver(p.date ? p.date.substr(0,7) : ''); });
+  cobros.forEach(function(c){ ver(c.fechaEvento ? c.fechaEvento.substr(0,7) : ''); });
+  cuotas.forEach(function(c){ ver(c.desde); });
+  return min || mkKey(todayLocal.getMonth(), todayLocal.getFullYear());
+}
+
+// Lista de meses 'YYYY-MM' entre dos extremos, inclusive.
+function mesesEntre(desde, hasta){
+  var out=[], p=String(desde).split('-');
+  var y=parseInt(p[0],10), m=parseInt(p[1],10)-1, guard=0;
+  while(guard++ < 600){
+    var mk = mkKey(m,y);
+    out.push(mk);
+    if(mk >= hasta) break;
+    m++; if(m>11){ m=0; y++; }
+  }
+  return out;
+}
+
+// LIBRO DIARIO: un renglón por movimiento real de caja, en orden cronológico,
+// con el saldo acumulado después de cada uno.
+// Los movimientos sin fecha cargada no entran en el saldo (la app tampoco los
+// cuenta) pero se devuelven aparte para listarlos: la rendición no esconde nada.
+function construirLibro(){
+  var movs = [], sinFecha = [];
+
+  payments.forEach(function(p){
+    var mv = {
+      date: p.date||'', tipo:'Cuota', detalle:'Cuota social',
+      persona: nombreMiembro(p.memberId),
+      imputacion: p.month ? ('Cuota de ' + mesLabel(p.month)) : '',
+      comprobante: p.ref||'', nota: p.note||'',
+      ingreso: p.amount>0 ?  p.amount : 0,
+      egreso:  p.amount<0 ? -p.amount : 0
+    };
+    (mv.date ? movs : sinFecha).push(mv);
+  });
+
+  cobroPagos.forEach(function(p){
+    var mv = {
+      date: p.date||'', tipo:'Evento', detalle:'Aporte a evento',
+      persona: nombreMiembro(p.memberId),
+      imputacion: nombreCobro(p.cobroId),
+      comprobante: p.ref||'', nota: p.note||'',
+      ingreso: p.amount>0 ?  p.amount : 0,
+      egreso:  p.amount<0 ? -p.amount : 0
+    };
+    (mv.date ? movs : sinFecha).push(mv);
+  });
+
+  // En gastos, un monto negativo es un ingreso que no es cuota ni evento.
+  expenses.forEach(function(e){
+    var esIngreso = e.amount < 0;
+    var mv = {
+      date: e.date||'',
+      tipo: esIngreso ? 'Otro ingreso' : 'Egreso',
+      detalle: e.concept || '(sin concepto)',
+      persona: '',
+      imputacion: e.cobroId ? ('Evento: ' + nombreCobro(e.cobroId))
+                            : (e.month ? ('Periodo ' + mesLabel(e.month)) : ''),
+      comprobante: '', nota: e.note||'',
+      ingreso: esIngreso ? -e.amount : 0,
+      egreso:  esIngreso ? 0 : e.amount
+    };
+    (mv.date ? movs : sinFecha).push(mv);
+  });
+
+  // Mismo día: primero las entradas y al final las salidas, así el saldo
+  // acumulado no muestra rojos falsos por el orden de carga.
+  var orden = { 'Cuota':0, 'Evento':1, 'Otro ingreso':2, 'Egreso':3 };
+  movs.sort(function(a,b){
+    var d = a.date.localeCompare(b.date);
+    if(d) return d;
+    var t = orden[a.tipo] - orden[b.tipo];
+    if(t) return t;
+    return (a.persona||a.detalle).localeCompare(b.persona||b.detalle, 'es');
+  });
+
+  var saldo = 0;
+  movs.forEach(function(m){ saldo += m.ingreso - m.egreso; m.saldo = saldo; });
+
+  sinFecha.sort(function(a,b){ return (a.persona||a.detalle).localeCompare(b.persona||b.detalle,'es'); });
+
+  return { movs:movs, sinFecha:sinFecha, saldoFinal:saldo };
+}
+
+function totalesRendicion(libro){
+  var t = { cuotas:0, eventos:0, otros:0, egresos:0, nCuotas:0, nEventos:0, nOtros:0, nEgresos:0 };
+  libro.movs.forEach(function(m){
+    if(m.tipo==='Cuota'){        t.cuotas  += m.ingreso - m.egreso; t.nCuotas++; }
+    else if(m.tipo==='Evento'){  t.eventos += m.ingreso - m.egreso; t.nEventos++; }
+    else if(m.tipo==='Otro ingreso'){ t.otros += m.ingreso;         t.nOtros++; }
+    else {                       t.egresos += m.egreso;             t.nEgresos++; }
+  });
+  t.ingresos   = t.cuotas + t.eventos + t.otros;
+  t.saldo      = t.ingresos - t.egresos;
+  t.reservado  = reservadoEventos();   // lo juntado para eventos abiertos no es plata del consejo
+  t.disponible = t.saldo - t.reservado;
+  return t;
+}
+
+// Un renglón por mes, con el saldo de caja al cierre de cada uno.
+function resumenMensual(movs){
+  var mapa = {}, claves = [];
+  movs.forEach(function(m){
+    var mk = m.date.substr(0,7);
+    if(!mapa[mk]){ mapa[mk] = {mk:mk, cuotas:0, eventos:0, otros:0, egresos:0}; claves.push(mk); }
+    var r = mapa[mk];
+    if(m.tipo==='Cuota')             r.cuotas  += m.ingreso - m.egreso;
+    else if(m.tipo==='Evento')       r.eventos += m.ingreso - m.egreso;
+    else if(m.tipo==='Otro ingreso') r.otros   += m.ingreso;
+    else                             r.egresos += m.egreso;
+  });
+  claves.sort();
+  var acum = 0;
+  return claves.map(function(mk){
+    var r = mapa[mk];
+    r.total     = r.cuotas + r.eventos + r.otros;
+    r.resultado = r.total - r.egresos;
+    acum += r.resultado;
+    r.acumulado = acum;
+    return r;
+  });
+}
+
+// Estado de cada evento: lo que se juntó, lo que ya se pagó y lo que queda.
+function detalleEventos(){
+  return cobros.slice().sort(function(a,b){
+    return String(a.fechaEvento||'9999-99-99').localeCompare(String(b.fechaEvento||'9999-99-99'));
+  }).map(function(c){
+    var rec = cobroTotal(c.id), gas = gastadoEnCobro(c.id), vistos = {};
+    cobroPagos.forEach(function(p){ if(p.cobroId===c.id) vistos[p.memberId]=1; });
+    return { c:c, recaudado:rec, gastado:gas, saldo:rec-gas, aportantes:Object.keys(vistos).length };
+  });
+}
+
+// Lo que puso cada miembro desde el arranque (cuotas + eventos).
+function aportesPorMiembro(){
+  return members.slice().sort(cmpByApellido).map(function(m){
+    var cuotasPagas = 0, totalCuotas = 0, totalEventos = 0;
+    payments.forEach(function(p){ if(p.memberId===m.id){ cuotasPagas++; totalCuotas += p.amount; } });
+    cobroPagos.forEach(function(p){ if(p.memberId===m.id) totalEventos += p.amount; });
+    var baja = currentBajaDate(m);
+    return {
+      m:m, estado: baja ? ('Baja ' + formatDateFull(baja)) : 'Activo',
+      cuotasPagas:cuotasPagas, totalCuotas:totalCuotas, totalEventos:totalEventos,
+      total: totalCuotas + totalEventos
+    };
+  });
+}
+
+// ¿Se le puede reclamar la cuota de ese mes? No si estaba de baja, ni antes de
+// su alta cuando el historial arranca con una. El que nunca tuvo movimientos de
+// alta/baja se considera miembro desde el primer mes de la rendición.
+function exigibleCuota(m, mk){
+  var p = String(mk).split('-');
+  if(isInactive(m, parseInt(p[1],10)-1, parseInt(p[0],10))) return false;
+  var h = getHistory(m);
+  if(h.length && h[0].t === 'alta' && mk < String(h[0].d).substr(0,7)) return false;
+  return true;
+}
+
+// Cuotas sin pagar desde el arranque hasta el mes en curso, valuadas con la
+// cuota que regía en cada mes.
+function deudaCuotas(){
+  var hasta = mkKey(todayLocal.getMonth(), todayLocal.getFullYear());
+  var meses = mesesEntre(primerMesConDatos(), hasta);
+  var filas = [];
+  members.forEach(function(m){
+    var faltan = [], monto = 0;
+    meses.forEach(function(mk){
+      if(!exigibleCuota(m, mk)) return;
+      if(getPayment(m.id, mk)) return;
+      faltan.push(mk);
+      monto += cuotaDe(mk);
+    });
+    if(faltan.length) filas.push({ m:m, meses:faltan, monto:monto });
+  });
+  filas.sort(function(a,b){ return b.monto - a.monto; });
+  return { filas:filas, meses:meses };
+}
+
+// Altas y bajas cargadas, en orden cronológico.
+function movimientosDePadron(){
+  var out = [];
+  members.forEach(function(m){
+    getHistory(m).forEach(function(ev){
+      out.push({ nombre: displayName(m), tipo: ev.t==='baja' ? 'Baja' : 'Alta', fecha: ev.d||'' });
+    });
+  });
+  out.sort(function(a,b){ return String(a.fecha).localeCompare(String(b.fecha)); });
+  return out;
+}
+
+// ── PDF ──
+function exportRendicionPDF(){
+  if(!window.jspdf){
+    toast('⚠️ Librería PDF no cargó. Probá de nuevo.', true);
+    return;
+  }
+  var libro = construirLibro();
+  if(!libro.movs.length && !libro.sinFecha.length){
+    toast('⚠️ Todavía no hay movimientos para rendir', true);
+    return;
+  }
+  // El PDF puede tener cientos de filas: damos un respiro al navegador para
+  // que alcance a pintar el overlay antes de bloquearse armándolo.
+  showAction('Armando la rendición...');
+  setTimeout(function(){
+    try { armarRendicionPDF(libro); }
+    catch(e){ console.error(e); toast('⚠️ No se pudo generar el PDF', true); }
+    finally { hideAction(); }
+  }, 60);
+}
+
+function armarRendicionPDF(libro){
+  var jsPDF = window.jspdf.jsPDF;
+  var doc   = new jsPDF({ orientation:'landscape', unit:'mm', format:'a4' });
+  var pageW = doc.internal.pageSize.getWidth();
+  var pageH = doc.internal.pageSize.getHeight();
+  var M = 14;                       // margen lateral
+  var ANCHO = pageW - M*2;          // 269 mm en A4 apaisado
+  var t = totalesRendicion(libro);
+  var hoy = localToday();
+
+  // ── Portada ──
+  var logoH = 16, logoW = logoH * (LOGO_W / LOGO_H);
+  try { doc.addImage(LOGO_B64, 'PNG', (pageW-logoW)/2, 6, logoW, logoH); }
+  catch(err){ console.warn('No se pudo insertar logo:', err); }
+
+  doc.setFont('helvetica','bold'); doc.setFontSize(14);
+  doc.text('RENDICION DE CUENTAS', pageW/2, 6+logoH+6, {align:'center'});
+  doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
+  var desdeTxt = libro.movs.length ? formatDateFull(libro.movs[0].date) : formatDateFull(hoy);
+  doc.text('Consejo Ciudadano   |   Periodo: ' + desdeTxt + ' al ' + formatDateFull(hoy),
+           pageW/2, 6+logoH+11.5, {align:'center'});
+  doc.setFontSize(8); doc.setTextColor(110,110,110);
+  doc.text('Detalle completo de entradas y salidas. Generado el ' + localNow(),
+           pageW/2, 6+logoH+16, {align:'center'});
+  doc.setTextColor(0,0,0);
+
+  var primerY = 6+logoH+23;
+
+  // Dibuja un título de sección y su tabla, saltando de página si no entra.
+  function seccion(titulo, nota, opts){
+    var y = doc.lastAutoTable ? doc.lastAutoTable.finalY + 9 : primerY;
+    if(y > pageH - 34){ doc.addPage(); y = 18; }
+    doc.setFont('helvetica','bold'); doc.setFontSize(10); doc.setTextColor(0,0,0);
+    doc.text(titulo, M, y);
+    if(nota){
+      doc.setFont('helvetica','normal'); doc.setFontSize(7.5); doc.setTextColor(110,110,110);
+      doc.text(nota, M, y+4);
+      doc.setTextColor(0,0,0);
+    }
+    opts.startY    = y + (nota ? 7.5 : 3.5);
+    opts.margin    = { left:M, right:M };
+    opts.theme     = 'grid';
+    opts.styles    = Object.assign({ font:'helvetica', fontSize:7.5, cellPadding:1.4,
+                                     valign:'middle', overflow:'linebreak',
+                                     lineColor:[150,150,150], lineWidth:0.15 }, opts.styles||{});
+    opts.headStyles = Object.assign({ fillColor:[226,232,238], textColor:[0,0,0],
+                                      fontStyle:'bold', halign:'center' }, opts.headStyles||{});
+    if(opts.foot){
+      // Los totales van una sola vez, al final: repetidos en cada hoja confunden.
+      opts.showFoot   = 'lastPage';
+      opts.footStyles = Object.assign({ fillColor:[240,242,245], textColor:[0,0,0],
+                                        fontStyle:'bold', halign:'right' }, opts.footStyles||{});
+    }
+    doc.autoTable(opts);
+  }
+
+  // ── 1. Resumen general ──
+  seccion('1. RESUMEN GENERAL', null, {
+    head: [['Concepto','Movimientos','Importe']],
+    body: [
+      ['Ingresos por cuotas sociales',            t.nCuotas,  money(t.cuotas)],
+      ['Ingresos por eventos (cenas, rifas...)',  t.nEventos, money(t.eventos)],
+      ['Otros ingresos',                          t.nOtros,   money(t.otros)],
+      ['TOTAL INGRESOS',        t.nCuotas+t.nEventos+t.nOtros, money(t.ingresos)],
+      ['TOTAL EGRESOS',                           t.nEgresos, money(-t.egresos)],
+      ['SALDO EN CAJA AL ' + formatDateFull(hoy),        '',  money(t.saldo)],
+      ['Reservado para eventos abiertos',                '',  money(-t.reservado)],
+      ['DISPONIBLE DEL CONSEJO',                         '',  money(t.disponible)]
+    ],
+    columnStyles: { 0:{cellWidth:ANCHO-80}, 1:{cellWidth:32,halign:'center'}, 2:{cellWidth:48,halign:'right'} },
+    didParseCell: function(d){
+      if(d.section==='body' && /^(TOTAL|SALDO|DISPONIBLE)/.test(String(d.row.raw[0]))){
+        d.cell.styles.fontStyle = 'bold';
+        d.cell.styles.fillColor = [242,244,246];
+      }
+    }
+  });
+
+  // ── 2. Mes a mes ──
+  var meses = resumenMensual(libro.movs);
+  if(meses.length){
+    seccion('2. RESUMEN MES A MES', 'El saldo acumulado es la plata en caja al cierre de cada mes.', {
+      head: [['Mes','Cuotas','Eventos','Otros ingresos','Total ingresos','Egresos','Resultado del mes','Saldo acumulado']],
+      body: meses.map(function(r){
+        return [ mesLabel(r.mk), money(r.cuotas), money(r.eventos), money(r.otros),
+                 money(r.total), money(-r.egresos), money(r.resultado), money(r.acumulado) ];
+      }),
+      foot: [[ 'TOTALES', money(t.cuotas), money(t.eventos), money(t.otros),
+               money(t.ingresos), money(-t.egresos), money(t.saldo), money(t.saldo) ]],
+      columnStyles: { 0:{cellWidth:38,halign:'left'}, 1:{halign:'right'}, 2:{halign:'right'},
+                      3:{halign:'right'}, 4:{halign:'right'}, 5:{halign:'right'},
+                      6:{halign:'right'}, 7:{halign:'right'} }
+    });
+  }
+
+  // ── 3. Libro diario ──
+  seccion('3. DETALLE DE TODOS LOS MOVIMIENTOS (' + libro.movs.length + ')',
+          'Orden cronológico. La columna Saldo es la plata en caja después de cada movimiento.', {
+    head: [['Fecha','Tipo','Detalle / Miembro','Imputacion','Comprob.','Nota','Entrada','Salida','Saldo']],
+    body: libro.movs.map(function(mv){
+      return [ formatDateFull(mv.date), mv.tipo, (mv.persona || mv.detalle), mv.imputacion,
+               mv.comprobante, mv.nota,
+               mv.ingreso ? money(mv.ingreso) : '',
+               mv.egreso  ? money(mv.egreso)  : '',
+               money(mv.saldo) ];
+    }),
+    foot: [[ 'TOTALES', '', '', '', '', '', money(t.ingresos), money(-t.egresos), money(t.saldo) ]],
+    styles: { fontSize: 7 },
+    columnStyles: {
+      0:{cellWidth:18,halign:'center'}, 1:{cellWidth:22}, 2:{cellWidth:52},
+      3:{cellWidth:44}, 4:{cellWidth:17,halign:'center'},
+      6:{cellWidth:19,halign:'right'}, 7:{cellWidth:19,halign:'right'}, 8:{cellWidth:19,halign:'right'}
+    },
+    didParseCell: function(d){
+      if(d.section!=='body') return;
+      if(d.column.index===6) d.cell.styles.textColor = [21,110,70];   // entradas en verde
+      if(d.column.index===7) d.cell.styles.textColor = [175,45,40];   // salidas en rojo
+      if(d.column.index===8) d.cell.styles.fontStyle = 'bold';
+    }
+  });
+
+  // ── 3.b Movimientos sin fecha ──
+  if(libro.sinFecha.length){
+    var sumSF = 0;
+    libro.sinFecha.forEach(function(mv){ sumSF += mv.ingreso - mv.egreso; });
+    seccion('3.b MOVIMIENTOS SIN FECHA CARGADA (' + libro.sinFecha.length + ')',
+            'Quedan fuera del saldo porque no tienen fecha. Se listan para que la rendicion este completa. Neto: ' + money(sumSF), {
+      head: [['Tipo','Detalle / Miembro','Imputacion','Comprob.','Nota','Entrada','Salida']],
+      body: libro.sinFecha.map(function(mv){
+        return [ mv.tipo, (mv.persona || mv.detalle), mv.imputacion, mv.comprobante, mv.nota,
+                 mv.ingreso ? money(mv.ingreso) : '', mv.egreso ? money(mv.egreso) : '' ];
+      }),
+      columnStyles: { 0:{cellWidth:24}, 1:{cellWidth:60}, 2:{cellWidth:50}, 3:{cellWidth:20,halign:'center'},
+                      4:{cellWidth:ANCHO-198}, 5:{cellWidth:22,halign:'right'}, 6:{cellWidth:22,halign:'right'} }
+    });
+  }
+
+  // ── 4. Eventos ──
+  var evs = detalleEventos();
+  if(evs.length){
+    var recT=0, gasT=0, salT=0;
+    evs.forEach(function(e){ recT+=e.recaudado; gasT+=e.gastado; salT+=e.saldo; });
+    seccion('4. DETALLE POR EVENTO', 'Gastado = gastos imputados a ese evento. Saldo = lo que todavia queda de lo recaudado.', {
+      head: [['Evento','Fecha','Valor por persona','Aportantes','Recaudado','Gastado','Saldo','Estado']],
+      body: evs.map(function(e){
+        return [ e.c.nombre, e.c.fechaEvento ? formatDateFull(e.c.fechaEvento) : '-',
+                 e.c.monto ? money(e.c.monto) : '-', e.aportantes,
+                 money(e.recaudado), money(-e.gastado), money(e.saldo),
+                 e.c.cerrado ? 'Cerrado' : 'Abierto' ];
+      }),
+      foot: [[ 'TOTALES', '', '', '', money(recT), money(-gasT), money(salT), '' ]],
+      columnStyles: { 0:{halign:'left'}, 1:{cellWidth:24,halign:'center'},
+                      2:{cellWidth:28,halign:'right'}, 3:{cellWidth:22,halign:'center'},
+                      4:{cellWidth:26,halign:'right'}, 5:{cellWidth:26,halign:'right'},
+                      6:{cellWidth:26,halign:'right'}, 7:{cellWidth:22,halign:'center'} }
+    });
+  }
+
+  // ── 5. Aportes por miembro ──
+  var aportes = aportesPorMiembro();
+  if(aportes.length){
+    var cT=0, eT=0, tT=0;
+    aportes.forEach(function(a){ cT+=a.totalCuotas; eT+=a.totalEventos; tT+=a.total; });
+    seccion('5. APORTES POR MIEMBRO (historico completo)', null, {
+      head: [['N','Miembro','Telefono','Estado','Cuotas pagadas','Total en cuotas','Total en eventos','Total aportado']],
+      body: aportes.map(function(a, i){
+        return [ i+1, displayName(a.m), a.m.phone ? formatPhoneDisplay(a.m.phone) : '', a.estado,
+                 a.cuotasPagas, money(a.totalCuotas), money(a.totalEventos), money(a.total) ];
+      }),
+      foot: [[ '', 'TOTALES', '', '', '', money(cT), money(eT), money(tT) ]],
+      columnStyles: { 0:{cellWidth:10,halign:'center'}, 1:{cellWidth:ANCHO-178,halign:'left'},
+                      2:{cellWidth:30,halign:'center'}, 3:{cellWidth:30,halign:'center'},
+                      4:{cellWidth:24,halign:'center'}, 5:{cellWidth:28,halign:'right'},
+                      6:{cellWidth:28,halign:'right'}, 7:{cellWidth:28,halign:'right'} }
+    });
+  }
+
+  // ── 6. Cuotas adeudadas ──
+  var deuda = deudaCuotas();
+  if(deuda.filas.length){
+    var deudaT = 0;
+    deuda.filas.forEach(function(f){ deudaT += f.monto; });
+    seccion('6. CUOTAS ADEUDADAS AL ' + formatDateFull(hoy),
+            'Meses sin pago entre ' + mesLabel(deuda.meses[0]) + ' y ' + mesLabel(deuda.meses[deuda.meses.length-1]) +
+            ', valuados con la cuota vigente de cada mes. Incluye el mes en curso y excluye los meses de baja. ' +
+            'Al miembro que se sumo despues hay que cargarle el alta para que no arrastre los meses anteriores.', {
+      head: [['Miembro','Meses adeudados','Importe estimado','Detalle de meses']],
+      body: deuda.filas.map(function(f){
+        return [ displayName(f.m), f.meses.length, money(f.monto), f.meses.map(mesCorto).join(', ') ];
+      }),
+      foot: [[ 'TOTAL ADEUDADO', '', money(deudaT), '' ]],
+      columnStyles: { 0:{cellWidth:60,halign:'left'}, 1:{cellWidth:28,halign:'center'},
+                      2:{cellWidth:32,halign:'right'}, 3:{cellWidth:ANCHO-120} }
+    });
+  }
+
+  // ── 7. Historial de la cuota ──
+  if(cuotas.length){
+    seccion('7. VALOR DE LA CUOTA SOCIAL', 'Cada valor rige desde ese mes en adelante.', {
+      head: [['Rige desde','Monto']],
+      body: cuotas.slice().sort(function(a,b){ return a.desde.localeCompare(b.desde); })
+                  .map(function(c){ return [ mesLabel(c.desde), money(c.monto) ]; }),
+      tableWidth: 'wrap',
+      columnStyles: { 0:{cellWidth:60}, 1:{cellWidth:40,halign:'right'} }
+    });
+  }
+
+  // ── 8. Altas y bajas ──
+  var padron = movimientosDePadron();
+  if(padron.length){
+    seccion('8. ALTAS Y BAJAS DE MIEMBROS', null, {
+      head: [['Fecha','Miembro','Movimiento']],
+      body: padron.map(function(p){ return [ p.fecha ? formatDateFull(p.fecha) : '-', p.nombre, p.tipo ]; }),
+      tableWidth: 'wrap',
+      columnStyles: { 0:{cellWidth:26,halign:'center'}, 1:{cellWidth:80,halign:'left'}, 2:{cellWidth:30,halign:'center'} }
+    });
+  }
+
+  // ── Firmas ──
+  var y = (doc.lastAutoTable ? doc.lastAutoTable.finalY : primerY) + 20;
+  if(y > pageH - 22){ doc.addPage(); y = 42; }
+  var anchoFirma = 70;
+  doc.setDrawColor(120,120,120); doc.setLineWidth(0.3);
+  doc.line(M, y, M+anchoFirma, y);
+  doc.line(pageW-M-anchoFirma, y, pageW-M, y);
+  doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(90,90,90);
+  doc.text('Tesoreria', M+anchoFirma/2, y+4.5, {align:'center'});
+  doc.text('Presidencia', pageW-M-anchoFirma/2, y+4.5, {align:'center'});
+  doc.setTextColor(0,0,0);
+
+  // ── Pie de todas las páginas (se numeran al final, ya sabiendo cuántas son) ──
+  var total = doc.internal.getNumberOfPages();
+  for(var i=1;i<=total;i++){
+    doc.setPage(i);
+    doc.setFont('helvetica','normal'); doc.setFontSize(7.5); doc.setTextColor(120,120,120);
+    doc.text('Consejo Ciudadano - Rendicion de cuentas - ' + localNow(), M, pageH-6);
+    doc.text('Pagina ' + i + ' de ' + total, pageW-M, pageH-6, {align:'right'});
+  }
+  doc.setTextColor(0,0,0);
+
+  var p = hoy.split('-');
+  var filename = 'Rendicion_Consejo_Ciudadano_' + p[2] + '-' + p[1] + '-' + p[0] + '.pdf';
+  entregarArchivo(doc.output('blob'), filename, 'Rendicion de cuentas',
+                  'Consejo Ciudadano - Rendicion completa al ' + formatDateFull(hoy));
+}
+
+// ── CSV ──
+// Mismo contenido que el PDF pero abrible en Excel para cruzar numeros.
+function exportRendicionCSV(){
+  var libro = construirLibro();
+  if(!libro.movs.length && !libro.sinFecha.length){
+    toast('⚠️ Todavía no hay movimientos para rendir', true);
+    return;
+  }
+  var t = totalesRendicion(libro);
+  var hoy = localToday();
+  var csv = '';
+
+  csv += csvRow(['RENDICION DE CUENTAS - CONSEJO CIUDADANO']);
+  csv += csvRow(['Periodo', libro.movs.length ? formatDateFull(libro.movs[0].date) : formatDateFull(hoy), 'al', formatDateFull(hoy)]);
+  csv += csvRow(['Generado', localNow()]);
+
+  csv += '\n' + csvRow(['RESUMEN GENERAL']);
+  csv += csvRow(['Concepto','Movimientos','Importe']);
+  csv += csvRow(['Ingresos por cuotas sociales', t.nCuotas, t.cuotas]);
+  csv += csvRow(['Ingresos por eventos', t.nEventos, t.eventos]);
+  csv += csvRow(['Otros ingresos', t.nOtros, t.otros]);
+  csv += csvRow(['TOTAL INGRESOS', t.nCuotas+t.nEventos+t.nOtros, t.ingresos]);
+  csv += csvRow(['TOTAL EGRESOS', t.nEgresos, -t.egresos]);
+  csv += csvRow(['SALDO EN CAJA', '', t.saldo]);
+  csv += csvRow(['Reservado para eventos abiertos', '', -t.reservado]);
+  csv += csvRow(['DISPONIBLE DEL CONSEJO', '', t.disponible]);
+
+  var meses = resumenMensual(libro.movs);
+  if(meses.length){
+    csv += '\n' + csvRow(['RESUMEN MES A MES']);
+    csv += csvRow(['Mes','Cuotas','Eventos','OtrosIngresos','TotalIngresos','Egresos','ResultadoDelMes','SaldoAcumulado']);
+    meses.forEach(function(r){
+      csv += csvRow([mesLabel(r.mk), r.cuotas, r.eventos, r.otros, r.total, -r.egresos, r.resultado, r.acumulado]);
+    });
+  }
+
+  csv += '\n' + csvRow(['DETALLE DE TODOS LOS MOVIMIENTOS']);
+  csv += csvRow(['Fecha','Tipo','DetalleOMiembro','Imputacion','Comprobante','Nota','Entrada','Salida','SaldoAcumulado']);
+  libro.movs.forEach(function(mv){
+    csv += csvRow([mv.date, mv.tipo, (mv.persona||mv.detalle), mv.imputacion, mv.comprobante, mv.nota,
+                   mv.ingreso||'', mv.egreso||'', mv.saldo]);
+  });
+
+  if(libro.sinFecha.length){
+    csv += '\n' + csvRow(['MOVIMIENTOS SIN FECHA CARGADA (no entran en el saldo)']);
+    csv += csvRow(['Tipo','DetalleOMiembro','Imputacion','Comprobante','Nota','Entrada','Salida']);
+    libro.sinFecha.forEach(function(mv){
+      csv += csvRow([mv.tipo, (mv.persona||mv.detalle), mv.imputacion, mv.comprobante, mv.nota,
+                     mv.ingreso||'', mv.egreso||'']);
+    });
+  }
+
+  var evs = detalleEventos();
+  if(evs.length){
+    csv += '\n' + csvRow(['DETALLE POR EVENTO']);
+    csv += csvRow(['Evento','FechaEvento','ValorPorPersona','Aportantes','Recaudado','Gastado','Saldo','Estado']);
+    evs.forEach(function(e){
+      csv += csvRow([e.c.nombre, e.c.fechaEvento||'', e.c.monto, e.aportantes,
+                     e.recaudado, -e.gastado, e.saldo, e.c.cerrado?'Cerrado':'Abierto']);
+    });
+  }
+
+  var aportes = aportesPorMiembro();
+  if(aportes.length){
+    csv += '\n' + csvRow(['APORTES POR MIEMBRO']);
+    csv += csvRow(['Miembro','Telefono','Estado','CuotasPagadas','TotalEnCuotas','TotalEnEventos','TotalAportado']);
+    aportes.forEach(function(a){
+      csv += csvRow([displayName(a.m), a.m.phone||'', a.estado, a.cuotasPagas,
+                     a.totalCuotas, a.totalEventos, a.total]);
+    });
+  }
+
+  var deuda = deudaCuotas();
+  if(deuda.filas.length){
+    csv += '\n' + csvRow(['CUOTAS ADEUDADAS AL '+formatDateFull(hoy)]);
+    csv += csvRow(['Miembro','MesesAdeudados','ImporteEstimado','DetalleDeMeses']);
+    deuda.filas.forEach(function(f){
+      csv += csvRow([displayName(f.m), f.meses.length, f.monto, f.meses.join(' ')]);
+    });
+  }
+
+  if(cuotas.length){
+    csv += '\n' + csvRow(['VALOR DE LA CUOTA SOCIAL']);
+    csv += csvRow(['RigeDesde','Monto']);
+    cuotas.slice().sort(function(a,b){ return a.desde.localeCompare(b.desde); }).forEach(function(c){
+      csv += csvRow([c.desde, c.monto]);
+    });
+  }
+
+  var padron = movimientosDePadron();
+  if(padron.length){
+    csv += '\n' + csvRow(['ALTAS Y BAJAS DE MIEMBROS']);
+    csv += csvRow(['Fecha','Miembro','Movimiento']);
+    padron.forEach(function(p){ csv += csvRow([p.fecha, p.nombre, p.tipo]); });
+  }
+
+  // El BOM es lo que hace que Excel muestre bien los acentos.
+  var d = hoy.split('-');
+  var blob = new Blob(['﻿'+csv], {type:'text/csv;charset=utf-8'});
+  entregarArchivo(blob, 'Rendicion_Consejo_Ciudadano_'+d[2]+'-'+d[1]+'-'+d[0]+'.csv',
+                  'Rendicion de cuentas', 'Consejo Ciudadano - Rendicion completa');
 }
 
 // ═══════ INIT ═══════
